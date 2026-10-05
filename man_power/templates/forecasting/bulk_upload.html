@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% load forecast_tags %}
+{% block title %}Bulk Excel Upload{% endblock %}
+{% block page_title %}Bulk Excel Upload{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card shadow-sm border-0 mb-4">
+      <div class="card-header bg-white fw-semibold"><i class="bi bi-1-circle text-primary"></i> Download Template</div>
+      <div class="card-body">
+        <p class="small text-muted">The template has dropdowns for Frequency, Time Unit, <strong>Run Monte Carlo (Yes/No)</strong> and <strong>Growth Period</strong>, an Instructions sheet, and a list of valid Function/Process names.</p>
+        <a href="{% url 'forecasting:upload_template' %}" class="btn btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Download Template</a>
+      </div>
+    </div>
+    <form method="post" enctype="multipart/form-data" novalidate class="card shadow-sm border-0" data-loading-form="true" data-loading-text="Validating rows and calculating...">
+      {% csrf_token %}
+      <div class="card-header bg-white fw-semibold"><i class="bi bi-2-circle text-primary"></i> Upload File</div>
+      <div class="card-body">
+        {% include "partials/_field.html" with field=form.file %}
+        <ul class="small text-muted ps-3 mb-0">
+          <li>Every row is validated on its own.</li>
+          <li>Valid rows are saved even if other rows fail.</li>
+          <li>Invalid rows are listed with the row number and reason.</li>
+          <li>Set <em>Run Monte Carlo</em> to <strong>No</strong> for deterministic-only rows. A blank value means Yes.</li>
+          <li>Fill <em>Growth Percentage</em>, <em>Growth Period</em> and <em>Forecast Horizon Months</em> to get a future projection. Blank growth means no projection.</li>
+        </ul>
+      </div>
+      <div class="card-footer bg-white text-end"><button type="submit" class="btn btn-primary"><i class="bi bi-upload"></i> Upload &amp; Process</button></div>
+    </form>
+  </div>
+  <div class="col-lg-7">
+    {% if result %}
+    <div class="row g-3 mb-3">
+      <div class="col-4"><div class="kpi-card kpi-blue"><div class="kpi-label">Total Rows</div><div class="kpi-value">{{ result.total_rows }}</div></div></div>
+      <div class="col-4"><div class="kpi-card kpi-green"><div class="kpi-label">Processed</div><div class="kpi-value">{{ result.success_count }}</div></div></div>
+      <div class="col-4"><div class="kpi-card kpi-red"><div class="kpi-label">Failed</div><div class="kpi-value">{{ result.error_count }}</div></div></div>
+    </div>
+    {% if result.errors %}
+    <div class="card shadow-sm border-0 mb-4">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold text-danger">Validation Errors</span>
+        <a href="{% url 'forecasting:upload_errors' %}" class="btn btn-sm btn-outline-danger"><i class="bi bi-download"></i> Error Report</a>
+      </div>
+      <div class="table-responsive audit-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Row</th><th>Function</th><th>Process</th><th>Reason</th></tr></thead>
+          <tbody>{% for e in result.errors %}<tr><td>{{ e.row_number }}</td><td>{{ e.function_name|default:"-" }}</td><td>{{ e.process_name|default:"-" }}</td><td class="small">{{ e.errors }}</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+    {% if created %}
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-white fw-semibold text-success">Created Forecasts</div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light"><tr><th>#</th><th>Process</th><th>Method</th><th class="text-end">Required</th><th class="text-end">Utilization</th><th>Status Today</th><th>Future Outlook</th></tr></thead>
+          <tbody>{% for f in created %}<tr><td><a href="{% url 'forecasting:forecast_result' f.pk %}">{{ f.pk }}</a></td><td>{{ f.process.process_name }}</td><td>{% include "partials/_method_badge.html" %}</td><td class="text-end">{{ f.required_fte|num }}</td><td class="text-end">{{ f.utilization_percentage|pct }}</td><td>{% include "partials/_status_badge.html" %}</td><td>{% include "partials/_outlook_badge.html" %}</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="card shadow-sm border-0 h-100"><div class="card-body text-center text-muted py-5">
+      <i class="bi bi-cloud-arrow-up display-5"></i>
+      <p class="mt-3 mb-0">Upload results will appear here.</p>
+    </div></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

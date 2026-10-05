@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+{% block content %}
+<form method="post" novalidate data-loading-form="true" data-loading-text="Calculating..." data-mc-loading-text="Running Monte Carlo simulation...">
+  {% csrf_token %}
+  {% if form.non_field_errors %}
+  <div class="alert alert-danger">{% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}</div>
+  {% endif %}
+  {% if form.errors and not form.non_field_errors %}
+  <div class="alert alert-danger">Please correct the highlighted fields below.</div>
+  {% endif %}
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-1-circle text-primary"></i> Process Details</div>
+    <div class="card-body"><div class="row">
+      <div class="col-md-6">{% include "partials/_field.html" with field=form.function %}</div>
+      <div class="col-md-6">{% include "partials/_field.html" with field=form.process %}</div>
+      <div class="col-md-4">{% include "partials/_field.html" with field=form.frequency %}</div>
+      <div class="col-md-4">{% include "partials/_field.html" with field=form.volume %}</div>
+      <div class="col-md-4">{% include "partials/_field.html" with field=form.current_fte %}</div>
+      <div class="col-md-8">{% include "partials/_field.html" with field=form.avg_processing_time %}</div>
+      <div class="col-md-4">{% include "partials/_field.html" with field=form.time_unit %}</div>
+    </div></div>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-2-circle text-primary"></i> Working Capacity</div>
+    <div class="card-body"><div class="row">
+      <div class="col-md-3">{% include "partials/_field.html" with field=form.working_hours_per_day %}</div>
+      <div class="col-md-3">{% include "partials/_field.html" with field=form.working_days_per_week %}</div>
+      <div class="col-md-3">{% include "partials/_field.html" with field=form.working_days_per_month %}</div>
+      <div class="col-md-3">{% include "partials/_field.html" with field=form.contingency_percentage %}</div>
+    </div>
+    <div class="capacity-preview" data-capacity-preview>
+      <i class="bi bi-calculator"></i> Productive time per FTE: <strong data-preview-minutes>-</strong> minutes/day (<strong data-preview-hours>-</strong> hours)
+    </div></div>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <span class="fw-semibold"><i class="bi bi-3-circle text-primary"></i> Monte Carlo Settings <span class="badge bg-light text-muted border ms-1">Optional</span></span>
+    </div>
+    <div class="card-body">
+      {% include "partials/_switch.html" with field=form.run_monte_carlo %}
+      <div class="row mt-2" data-mc-fields>
+        <div class="col-md-3">{% include "partials/_field.html" with field=form.volume_variation_percentage %}</div>
+        <div class="col-md-3">{% include "partials/_field.html" with field=form.time_variation_percentage %}</div>
+        <div class="col-md-3">{% include "partials/_field.html" with field=form.simulation_count %}</div>
+        <div class="col-md-3">{% include "partials/_field.html" with field=form.simulation_seed %}</div>
+      </div>
+      <div class="alert alert-secondary small mb-0 mt-2" data-mc-off-note>
+        <i class="bi bi-info-circle"></i> Monte Carlo is off. The status will be decided from the deterministic calculation only
+        (required FTE and utilization). P90 FTE and sufficiency probability will not be calculated.
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-4-circle text-primary"></i> Future Growth Forecast <span class="badge bg-light text-muted border ms-1">Optional</span></div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-4">{% include "partials/_field.html" with field=form.growth_rate_percentage %}</div>
+        <div class="col-md-4">{% include "partials/_field.html" with field=form.growth_period %}</div>
+        <div class="col-md-4">{% include "partials/_field.html" with field=form.forecast_horizon_months %}</div>
+      </div>
+      <div class="capacity-preview" data-growth-preview>
+        <i class="bi bi-graph-up-arrow"></i> <span data-growth-text>Enter a growth % to project future manpower month by month.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-body">{% include "partials/_field.html" with field=form.remarks %}</div>
+  </div>
+
+  <div class="d-flex gap-2 justify-content-end">
+    <a href="{% if object %}{% url 'forecasting:forecast_detail' object.pk %}{% else %}{% url 'forecasting:forecast_list' %}{% endif %}" class="btn btn-outline-secondary">Cancel</a>
+    <button type="submit" class="btn btn-primary"><i class="bi bi-play-circle"></i> <span data-submit-label data-mc-label="Calculate &amp; Run Simulation" data-det-label="Calculate">Calculate &amp; Run Simulation</span></button>
+  </div>
+</form>
+{% endblock %}

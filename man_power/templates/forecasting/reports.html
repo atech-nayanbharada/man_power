@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load forecast_tags %}
+{% block title %}Reports{% endblock %}
+{% block page_title %}Report Download{% endblock %}
+{% block content %}
+{% include "partials/_filters.html" %}
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div>
+      <div class="h5 mb-1">Forecast Excel Report</div>
+      <div class="text-muted small">Includes inputs, deterministic results, Monte Carlo results ("Not run" where off), the growth projection summary, status, recommendation, a summary sheet and a month-by-month <strong>Growth Projection</strong> sheet.</div>
+      <div class="mt-2"><span class="badge bg-primary">{{ record_count }} record(s)</span> match the current filters.</div>
+    </div>
+    {% if record_count %}
+    <a href="{% url 'forecasting:report_export' %}?{{ query_string }}" class="btn btn-success btn-lg"><i class="bi bi-file-earmark-excel"></i> Download Report</a>
+    {% else %}
+    <button class="btn btn-success btn-lg" disabled><i class="bi bi-file-earmark-excel"></i> Download Report</button>
+    {% endif %}
+  </div>
+</div>
+<div class="card shadow-sm border-0">
+  <div class="card-header bg-white fw-semibold">Preview (first 10)</div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead class="table-light"><tr><th>#</th><th>Function</th><th>Process</th><th>Method</th><th class="text-end">Current</th><th class="text-end">Required</th><th class="text-end">Utilization</th><th>Status Today</th><th>Future Outlook</th><th>Approval</th><th></th></tr></thead>
+      <tbody>
+      {% for f in preview %}
+      <tr>
+        <td>{{ f.pk }}</td><td>{{ f.function.function_name }}</td><td>{{ f.process.process_name }}</td>
+        <td>{% include "partials/_method_badge.html" %}</td>
+        <td class="text-end">{{ f.current_fte|num }}</td><td class="text-end">{{ f.required_fte|num }}</td>
+        <td class="text-end">{{ f.utilization_percentage|pct }}</td>
+        <td>{% include "partials/_status_badge.html" %}</td>
+        <td>{% include "partials/_outlook_badge.html" %}</td>
+        <td><span class="badge bg-{{ f.approval_css }}">{{ f.get_approval_status_display }}</span></td>
+        <td class="text-end"><a href="{% url 'forecasting:forecast_export' f.pk %}" class="btn btn-sm btn-outline-success" title="Download single forecast"><i class="bi bi-download"></i></a></td>
+      </tr>
+      {% empty %}<tr><td colspan="11" class="text-center text-muted py-4">No records.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

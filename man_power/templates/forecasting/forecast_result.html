@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Forecast Result #{{ f.pk }}{% endblock %}
+{% block page_title %}Forecast Result{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h2 class="h5 mb-0">{{ f.function.function_name }} &rsaquo; {{ f.process.process_name }}</h2>
+    <div class="small text-muted">Forecast #{{ f.pk }} &middot; {{ f.created_at|date:"d M Y, H:i" }} &middot; by {{ f.created_by.username|default:"-" }}</div>
+  </div>
+  {% include "partials/_forecast_actions.html" %}
+</div>
+{% include "partials/_forecast_summary.html" %}
+<div class="text-end"><a href="{% url 'forecasting:forecast_detail' f.pk %}" class="btn btn-link">View full detail, approval and audit trail &rarr;</a></div>
+{% endblock %}

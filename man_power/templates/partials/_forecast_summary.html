@@ -1,0 +1,127 @@
+{% load forecast_tags %}
+<div class="status-banner status-banner-{{ f.status_css }} mb-4">
+  <div class="d-flex flex-wrap align-items-center gap-3">
+    <div class="status-icon">
+      {% if f.status == "LESS" %}<i class="bi bi-exclamation-octagon-fill"></i>{% elif f.status == "SUFFICIENT" %}<i class="bi bi-check-circle-fill"></i>{% else %}<i class="bi bi-arrow-up-circle-fill"></i>{% endif %}
+    </div>
+    <div class="flex-grow-1">
+      <div class="small text-uppercase fw-semibold opacity-75">Manpower Status Today</div>
+      <div class="h4 mb-1">{{ f.get_status_display }}</div>
+      <div>{{ f.recommendation }}</div>
+      {% if f.has_projection %}<div class="mt-2 small fw-semibold"><i class="bi bi-graph-up-arrow"></i>
+        {% if f.outlook == "ok" %}Future: stays sufficient up to {{ f.projection_end_label }}.{% elif f.outlook == "short_future" %}Future: more manpower needed from {{ f.shortfall_label }}.{% else %}Future: see the growth projection below.{% endif %}
+        <a href="#growth-projection" class="link-light">View forecast</a></div>{% endif %}
+    </div>
+    <div class="text-end d-flex flex-column gap-1 align-items-end">
+      <span class="badge bg-{{ f.approval_css }}">{{ f.get_approval_status_display }}</span>
+      {% include "partials/_method_badge.html" %}
+    </div>
+  </div>
+</div>
+{% if f.high_utilization_risk %}
+<div class="alert alert-orange d-flex gap-2"><i class="bi bi-exclamation-triangle-fill"></i>
+  <div>Current manpower may be sufficient under normal conditions, but the process has a high utilization risk.</div>
+</div>
+{% endif %}
+{% if not summary %}
+<div class="alert alert-secondary d-flex flex-wrap align-items-center gap-2">
+  <i class="bi bi-info-circle-fill"></i>
+  <div class="flex-grow-1">Monte Carlo simulation was <strong>not run</strong> for this forecast. The status is based on the deterministic calculation only, so variability risk (P90, sufficiency probability) has not been assessed.</div>
+  {% if can_edit %}
+  <button type="button" class="btn btn-sm btn-primary" data-confirm-url="{% url 'forecasting:forecast_rerun' f.pk %}?monte_carlo=on" data-confirm-title="Run Monte Carlo" data-confirm-message="Switch on Monte Carlo and run {{ f.simulation_count }} simulations? The forecast will be resubmitted for approval." data-confirm-button="Run Monte Carlo" data-confirm-class="btn-primary" data-loading="true"><i class="bi bi-shuffle"></i> Run Monte Carlo now</button>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-gray"><div class="kpi-label">Current FTE</div><div class="kpi-value">{{ f.current_fte|num }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-blue"><div class="kpi-label">Calculated Required FTE</div><div class="kpi-value">{{ f.required_fte|num }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-blue"><div class="kpi-label">Operational Recommended FTE</div><div class="kpi-value">{{ f.recommended_operational_fte|num:0 }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-purple"><div class="kpi-label">Risk-Adjusted P90 FTE</div><div class="kpi-value">{% if summary %}{{ summary.risk_adjusted_recommended_fte|num:0 }}{% else %}<span class="kpi-muted">Not run</span>{% endif %}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-gray"><div class="kpi-label">FTE Gap</div><div class="kpi-value {{ f.fte_gap|gap_css }}">{{ f.fte_gap|signed }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-gray"><div class="kpi-label">Utilization</div><div class="kpi-value">{{ f.utilization_percentage|pct }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-green"><div class="kpi-label">Sufficiency Probability</div><div class="kpi-value">{% if summary %}{{ summary.sufficiency_probability|pct }}{% else %}<span class="kpi-muted">Not run</span>{% endif %}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="kpi-card kpi-red"><div class="kpi-label">Failure Probability</div><div class="kpi-value">{% if summary %}{{ summary.failure_probability|pct }}{% else %}<span class="kpi-muted">Not run</span>{% endif %}</div></div></div>
+</div>
+
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-info-circle text-primary"></i> Why this status?</div>
+  <div class="card-body">{{ f.status_explanation }}</div>
+</div>
+
+{% if f.has_projection %}
+  {% include "partials/_projection.html" %}
+{% else %}
+<div class="alert alert-light border d-flex gap-2 mb-4"><i class="bi bi-graph-up"></i>
+  <div>No growth % was entered, so no future projection was calculated. {% if can_edit %}<a href="{% url 'forecasting:forecast_update' f.pk %}">Edit the forecast</a> and set <em>Volume Growth (%)</em> to see when manpower becomes insufficient.{% endif %}</div>
+</div>
+{% endif %}
+
+<div class="row g-4 mb-4">
+  <div class="col-lg-6">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold">Inputs</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0 kv-table">
+          <tr><th>Function Name</th><td>{{ f.function.function_name }}</td></tr>
+          <tr><th>Process Name</th><td>{{ f.process.process_name }}</td></tr>
+          <tr><th>Frequency</th><td>{{ f.get_frequency_display }}</td></tr>
+          <tr><th>Original Volume</th><td>{{ f.volume|num }}</td></tr>
+          <tr><th>Average Time per Volume</th><td>{{ f.avg_processing_time|num }} {{ f.get_time_unit_display }}</td></tr>
+          <tr><th>Working Hours / Day</th><td>{{ f.working_hours_per_day|num }}</td></tr>
+          <tr><th>Working Days / Week, Month</th><td>{{ f.working_days_per_week }} / {{ f.working_days_per_month }}</td></tr>
+          <tr><th>Contingency</th><td>{{ f.contingency_percentage|pct }}</td></tr>
+          <tr><th>Monte Carlo</th><td>{% if f.run_monte_carlo %}On{% else %}Off (deterministic only){% endif %}</td></tr>
+          {% if f.run_monte_carlo %}
+          <tr><th>Volume / Time Variation</th><td>{{ f.volume_variation_percentage|pct }} / {{ f.time_variation_percentage|pct }}</td></tr>
+          <tr><th>Simulations / Seed</th><td>{{ f.simulation_count|num:0 }} / {{ f.simulation_seed|default:"Random" }}</td></tr>
+          {% endif %}
+          <tr><th>Volume Growth</th><td>{% if f.has_projection %}{{ f.growth_rate_percentage|signed }}% per {{ f.get_growth_period_display|lower }}, {{ f.forecast_horizon_months }} months{% else %}None{% endif %}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold">Deterministic Calculation (Today)</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0 kv-table">
+          <tr><th>Converted Daily Volume</th><td>{{ f.daily_volume|num }}</td></tr>
+          <tr><th>Processing Time (minutes)</th><td>{{ f.processing_time_minutes|num:4 }}</td></tr>
+          <tr><th>Productive Minutes per FTE / Day</th><td>{{ f.productive_minutes_per_fte|num }}</td></tr>
+          <tr><th>Expected Workload Hours / Day</th><td>{{ f.workload_hours|num }}</td></tr>
+          <tr><th>Available Capacity Hours / Day</th><td>{{ f.available_capacity_hours|num }}</td></tr>
+          <tr><th>Calculated Required FTE</th><td>{{ f.required_fte|num }}</td></tr>
+          <tr><th>Operational Recommended FTE</th><td>{{ f.recommended_operational_fte|num:0 }}</td></tr>
+          <tr><th>FTE Gap / Operational Gap</th><td class="{{ f.fte_gap|gap_css }}">{{ f.fte_gap|signed }} / {{ f.operational_fte_gap|signed }}</td></tr>
+          <tr><th>Utilization / Unused Capacity</th><td>{{ f.utilization_percentage|pct }} / {{ f.unused_capacity_percentage|pct }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if summary %}
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold">Monte Carlo Simulation Today ({{ summary.simulation_count|num:0 }} runs)</div>
+  <div class="card-body">
+    <div class="table-responsive mb-3">
+      <table class="table table-bordered text-center mb-0">
+        <thead class="table-light"><tr><th>Average</th><th>Min</th><th>Max</th><th>Std Dev</th><th>P50</th><th>P80</th><th class="table-primary">P90</th><th>P95</th><th>P99</th></tr></thead>
+        <tbody><tr>
+          <td>{{ summary.average_required_fte|num }}</td><td>{{ summary.minimum_required_fte|num }}</td>
+          <td>{{ summary.maximum_required_fte|num }}</td><td>{{ summary.standard_deviation|num:3 }}</td>
+          <td>{{ summary.p50_required_fte|num }}</td><td>{{ summary.p80_required_fte|num }}</td>
+          <td class="table-primary fw-bold">{{ summary.p90_required_fte|num }}</td>
+          <td>{{ summary.p95_required_fte|num }}</td><td>{{ summary.p99_required_fte|num }}</td>
+        </tr></tbody>
+      </table>
+    </div>
+    <div class="row g-4">
+      <div class="col-lg-7"><div class="chart-box"><canvas data-chart="histogram"></canvas></div></div>
+      <div class="col-lg-5"><div class="chart-box"><canvas data-chart="percentiles"></canvas></div></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{{ chart_data|json_script:"chart-data" }}

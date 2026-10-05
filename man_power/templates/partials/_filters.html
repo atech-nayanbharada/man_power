@@ -1,0 +1,22 @@
+<form method="get" class="card filter-card shadow-sm border-0 mb-4">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-4 col-xl-2">{{ filter_form.q.label_tag }}{{ filter_form.q }}</div>
+      <div class="col-6 col-md-4 col-xl-2">{{ filter_form.function.label_tag }}{{ filter_form.function }}</div>
+      <div class="col-6 col-md-4 col-xl-2">{{ filter_form.process.label_tag }}{{ filter_form.process }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.status.label_tag }}{{ filter_form.status }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.frequency.label_tag }}{{ filter_form.frequency }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.approval_status.label_tag }}{{ filter_form.approval_status }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.monte_carlo.label_tag }}{{ filter_form.monte_carlo }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.outlook.label_tag }}{{ filter_form.outlook }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.created_by.label_tag }}{{ filter_form.created_by }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.from_date.label_tag }}{{ filter_form.from_date }}</div>
+      <div class="col-6 col-md-3 col-xl-2">{{ filter_form.to_date.label_tag }}{{ filter_form.to_date }}
+        {% for e in filter_form.to_date.errors %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}</div>
+      <div class="col-12 col-md-6 col-xl-2 d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Apply</button>
+        <a href="{{ request.path }}" class="btn btn-outline-secondary">Reset</a>
+      </div>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load forecast_tags %}
+{% block title %}Forecast #{{ f.pk }}{% endblock %}
+{% block page_title %}Forecast Detail{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h2 class="h5 mb-0">#{{ f.pk }} &middot; {{ f.function.function_name }} &rsaquo; {{ f.process.process_name }}</h2>
+    <div class="small text-muted">Created {{ f.created_at|date:"d M Y, H:i" }} by {{ f.created_by.username|default:"-" }} &middot; Updated {{ f.updated_at|date:"d M Y, H:i" }}</div>
+  </div>
+  {% include "partials/_forecast_actions.html" %}
+</div>
+
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-person-check"></i> Maker-Checker Approval</div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3"><div class="small text-muted">Approval Status</div><span class="badge bg-{{ f.approval_css }}">{{ f.get_approval_status_display }}</span></div>
+      <div class="col-md-3"><div class="small text-muted">Maker</div>{{ f.created_by.username|default:"-" }}</div>
+      <div class="col-md-3"><div class="small text-muted">Reviewed By</div>{{ f.approved_by.username|default:"-" }}</div>
+      <div class="col-md-3"><div class="small text-muted">Reviewed At</div>{{ f.approved_at|date:"d M Y, H:i"|default:"-" }}</div>
+      <div class="col-12"><div class="small text-muted">Comments</div>{{ f.approval_comments|default:"-"|linebreaksbr }}</div>
+      {% if f.remarks %}<div class="col-12"><div class="small text-muted">Remarks</div>{{ f.remarks|linebreaksbr }}</div>{% endif %}
+    </div>
+  </div>
+</div>
+
+{% include "partials/_forecast_summary.html" %}
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold">Simulation History</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Run At</th><th class="text-end">Runs</th><th class="text-end">P50</th><th class="text-end">P90</th><th class="text-end">Sufficiency</th></tr></thead>
+          <tbody>
+          {% for s in simulation_history %}
+            <tr><td>{{ s.created_at|date:"d M Y H:i" }}</td><td class="text-end">{{ s.simulation_count|num:0 }}</td><td class="text-end">{{ s.p50_required_fte|num }}</td><td class="text-end">{{ s.p90_required_fte|num }}</td><td class="text-end">{{ s.sufficiency_probability|pct }}</td></tr>
+          {% empty %}<tr><td colspan="5" class="text-muted text-center">No Monte Carlo simulations have been run for this forecast.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if simulation_history and not f.run_monte_carlo %}<div class="card-footer bg-white small text-muted">Monte Carlo is currently off; these earlier runs are kept for audit only.</div>{% endif %}
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold">Audit Trail</div>
+      <div class="table-responsive audit-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>When</th><th>Action</th><th>By</th></tr></thead>
+          <tbody>
+          {% for log in audit_logs %}
+            <tr><td>{{ log.performed_at|date:"d M Y H:i" }}</td><td>{{ log.get_action_display }}</td><td>{{ log.performed_by.username|default:"-" }}</td></tr>
+          {% empty %}<tr><td colspan="3" class="text-muted text-center">No audit entries</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

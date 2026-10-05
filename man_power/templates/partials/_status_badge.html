@@ -1,0 +1,1 @@
+<span class="badge status-badge bg-{{ f.status_css }}">{{ f.get_status_display }}</span>{% if f.high_utilization_risk %} <span class="badge status-badge bg-orange" title="Utilization above target band">High Utilization Risk</span>{% endif %}
