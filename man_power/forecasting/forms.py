@@ -152,7 +152,7 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
             "working_hours_per_day": "Working Hours Per Day",
             "working_days_per_week": "Working Days Per Week",
             "working_days_per_month": "Working Days Per Month",
-            "contingency_percentage": "Contingency (%)",
+            "contingency_percentage": "Shrinkage (%)",
             "run_monte_carlo": "Run Monte Carlo simulation",
             "volume_variation_percentage": "Volume Variation (%)",
             "time_variation_percentage": "Processing Time Variation (%)",
