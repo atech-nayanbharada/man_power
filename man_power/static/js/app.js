@@ -1,5 +1,6 @@
 /* Global UI behaviour: sidebar, confirmation modal, loading overlay, dependent dropdown,
-   capacity preview, growth preview, Monte Carlo on/off toggle and scenario formset. */
+   capacity preview, growth preview, Monte Carlo on/off toggle, scenario formset,
+   progress-bar widths and print. */
 (function () {
   "use strict";
 
@@ -9,6 +10,18 @@
     btn.addEventListener("click", () => sidebar && sidebar.classList.toggle("show")));
   document.querySelectorAll("[data-sidebar-close]").forEach((el) =>
     el.addEventListener("click", () => sidebar && sidebar.classList.remove("show")));
+
+  /* ---------- Progress bars (width from data attribute, no inline CSS in templates) ---------- */
+  document.querySelectorAll("[data-width]").forEach((bar) => {
+    const w = Math.max(0, Math.min(100, parseFloat(bar.dataset.width) || 0));
+    requestAnimationFrame(() => { bar.style.width = `${w}%`; });
+  });
+
+  /* ---------- Print ---------- */
+  document.querySelectorAll("[data-print]").forEach((btn) => btn.addEventListener("click", () => {
+    document.querySelectorAll("details.methodology").forEach((d) => { d.open = true; });
+    window.print();
+  }));
 
   /* ---------- Loading overlay ---------- */
   const overlay = document.getElementById("loadingOverlay");

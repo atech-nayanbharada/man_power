@@ -108,6 +108,11 @@ FORECASTING = {
     "HORIZON_DEFAULT": 12,         # default growth projection horizon (months)
     "HORIZON_MAX": 60,             # maximum growth projection horizon (months)
     "GROWTH_MAX_FACTOR": 1000,     # max volume multiplier allowed at the end of the horizon
+    # ---- Executive dashboard ----
+    "EXEC_COST_PER_FTE": 600000,   # default fully loaded annual cost per FTE (editable on the page)
+    "EXEC_CURRENCY": "₹",          # currency symbol shown on the executive dashboard
+    "EXEC_HORIZON_MONTHS": 12,     # outlook window for the executive headcount trajectory
+    "EXEC_TARGET_UTILIZATION": 80, # organisation-level target utilization (%)
 }
 
 if not DEBUG:

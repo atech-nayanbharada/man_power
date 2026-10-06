@@ -6,6 +6,8 @@ app_name = "forecasting"
 
 urlpatterns = [
     path("", views.DashboardView.as_view(), name="dashboard"),
+    path("executive/", views.ExecutiveDashboardView.as_view(), name="executive"),
+    path("executive/export/", views.ExecutiveExportView.as_view(), name="executive_export"),
     path("forecasts/", views.ForecastListView.as_view(), name="forecast_list"),
     path("forecasts/add/", views.ForecastCreateView.as_view(), name="forecast_create"),
     path("forecasts/<int:pk>/", views.ForecastDetailView.as_view(), name="forecast_detail"),

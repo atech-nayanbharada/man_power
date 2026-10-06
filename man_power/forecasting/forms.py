@@ -147,12 +147,12 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
             "function": "Function Name",
             "process": "Process Name",
             "current_fte": "Current FTE",
-            "avg_processing_time": "Average Time to Complete One Volume",
+            "avg_processing_time": "AHT(Average Handling Time) To Complete One Volume",
             "time_unit": "Average Time Unit",
             "working_hours_per_day": "Working Hours Per Day",
             "working_days_per_week": "Working Days Per Week",
             "working_days_per_month": "Working Days Per Month",
-            "contingency_percentage": "Shrinkage (%)",
+            "contingency_percentage": "Contingency (%)",
             "run_monte_carlo": "Run Monte Carlo simulation",
             "volume_variation_percentage": "Volume Variation (%)",
             "time_variation_percentage": "Processing Time Variation (%)",
@@ -347,6 +347,31 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
         if d.get("to_date"):
             queryset = queryset.filter(created_at__date__lte=d["to_date"])
         return queryset
+
+
+class ExecutiveFilterForm(BootstrapFormMixin, forms.Form):
+    """Controls for the executive dashboard (all optional)."""
+    HORIZON_CHOICES = [(3, "3 months"), (6, "6 months"), (12, "12 months"), (18, "18 months"), (24, "24 months")]
+
+    function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False,
+                                      empty_label="All functions")
+    horizon = forms.TypedChoiceField(choices=HORIZON_CHOICES, coerce=int, required=False, label="Outlook")
+    cost_per_fte = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=14, decimal_places=2,
+                                      label="Annual cost per FTE",
+                                      widget=forms.NumberInput(attrs={"step": "10000", "min": "0"}))
+    approved_only = forms.BooleanField(required=False, label="Approved forecasts only",
+                                       widget=forms.CheckboxInput(attrs={"role": "switch"}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._apply_bootstrap()
+
+    def values(self, defaults):
+        """Return (function, horizon, cost_per_fte, approved_only) with defaults for blanks or invalid input."""
+        d = self.cleaned_data if self.is_bound and self.is_valid() else {}
+        return (d.get("function"), d.get("horizon") or defaults["horizon"],
+                d.get("cost_per_fte") if d.get("cost_per_fte") is not None else defaults["cost_per_fte"],
+                bool(d.get("approved_only")))
 
 
 class ApprovalForm(BootstrapFormMixin, forms.Form):

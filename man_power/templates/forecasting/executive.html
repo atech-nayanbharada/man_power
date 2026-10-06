@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% load forecast_tags %}
+{% block title %}Executive Dashboard{% endblock %}
+{% block page_title %}Executive Dashboard{% endblock %}
+{% block content %}
+{% with k=kpis cur=config.currency %}
+<div class="exec-header d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h2 class="h4 mb-1">Workforce Capacity &mdash; Executive Summary</h2>
+    <div class="text-muted small">As of {{ today|date:"d M Y" }} &middot; Outlook to {{ horizon_label }} &middot; {{ filters_text }} &middot; Cost per FTE {{ money.cost_per_fte }} / year</div>
+  </div>
+  <div class="d-flex gap-2 no-print">
+    <a href="{% url 'forecasting:executive_export' %}?{{ export_query }}" class="btn btn-outline-success btn-sm"><i class="bi bi-file-earmark-excel"></i> Export Excel</a>
+    <button type="button" class="btn btn-outline-secondary btn-sm" data-print><i class="bi bi-printer"></i> Print / PDF</button>
+    <a href="{% url 'forecasting:dashboard' %}" class="btn btn-outline-primary btn-sm"><i class="bi bi-speedometer2"></i> Operations view</a>
+  </div>
+</div>
+
+<form method="get" class="card filter-card shadow-sm border-0 mb-4 no-print">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-6 col-md-3">{{ form.function.label_tag }}{{ form.function }}</div>
+      <div class="col-6 col-md-2">{{ form.horizon.label_tag }}{{ form.horizon }}</div>
+      <div class="col-6 col-md-3">{{ form.cost_per_fte.label_tag }}<div class="input-group"><span class="input-group-text">{{ cur }}</span>{{ form.cost_per_fte }}</div></div>
+      <div class="col-6 col-md-2"><div class="form-check form-switch mb-2">{{ form.approved_only }} <label class="form-check-label" for="{{ form.approved_only.id_for_label }}">Approved only</label></div></div>
+      <div class="col-12 col-md-2 d-flex gap-2"><button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Apply</button><a href="{{ request.path }}" class="btn btn-outline-secondary">Reset</a></div>
+    </div>
+  </div>
+</form>
+
+{% if not k.process_count %}
+<div class="card shadow-sm border-0"><div class="card-body text-center py-5">
+  <i class="bi bi-briefcase display-5 text-muted"></i>
+  <h3 class="h5 mt-3">No forecasts available for this selection</h3>
+  <p class="text-muted mb-0">Create forecasts or adjust the filters to see the executive summary.</p>
+</div></div>
+{% else %}
+
+{% if k.pending_count and not form.approved_only.value %}
+<div class="alert alert-info small d-flex gap-2 no-print"><i class="bi bi-info-circle"></i>
+  <div>{{ k.pending_count }} of {{ k.process_count }} processes use forecasts that are not yet approved. Switch on <em>Approved only</em> for board-reported figures.</div>
+</div>
+{% endif %}
+
+<!-- ===================== Row 1: health score + bottom line ===================== -->
+<div class="row g-4 mb-4">
+  <div class="col-lg-4">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold d-flex justify-content-between">
+        <span><i class="bi bi-heart-pulse text-primary"></i> Capacity Health Score</span>
+        <span class="badge bg-{{ score.rag }}">{% if score.rag == "success" %}Healthy{% elif score.rag == "amber" %}Needs attention{% else %}At risk{% endif %}</span>
+      </div>
+      <div class="card-body">
+        <div class="gauge-wrap"><canvas data-chart="healthGauge"></canvas><div class="gauge-value text-{{ score.rag }}">{{ score.score }}<small>/100</small></div></div>
+        <div class="pillar"><div class="d-flex justify-content-between small"><span>Coverage <span class="text-muted">(40%)</span></span><strong>{{ score.coverage }}</strong></div>
+          <div class="progress" role="progressbar" aria-label="Coverage"><div class="progress-bar bg-primary" data-width="{{ score.coverage }}"></div></div>
+          <div class="pillar-note">Processes not short of people today</div></div>
+        <div class="pillar"><div class="d-flex justify-content-between small"><span>Efficiency <span class="text-muted">(30%)</span></span><strong>{{ score.efficiency }}</strong></div>
+          <div class="progress" role="progressbar" aria-label="Efficiency"><div class="progress-bar bg-info" data-width="{{ score.efficiency }}"></div></div>
+          <div class="pillar-note">Closeness of utilization to the {{ config.target_utilization|num:0 }}% target</div></div>
+        <div class="pillar"><div class="d-flex justify-content-between small"><span>Resilience <span class="text-muted">(30%)</span></span><strong>{{ score.resilience }}</strong></div>
+          <div class="progress" role="progressbar" aria-label="Resilience"><div class="progress-bar bg-purple" data-width="{{ score.resilience }}"></div></div>
+          <div class="pillar-note">{{ score.resilience_basis }}</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="card shadow-sm border-0 h-100">
+      <div class="card-header bg-white fw-semibold"><i class="bi bi-bullseye text-primary"></i> The Bottom Line</div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-sm-6"><div class="headline headline-red">
+            <div class="headline-label">Net hires needed now</div>
+            <div class="headline-value">{{ k.net_hire_now }} <small>FTE</small></div>
+            <div class="headline-note">{{ k.hire_now|num:0 }} gross &minus; {{ k.redeployable }} redeployable &middot; {{ money.budget_now }}/yr</div>
+          </div></div>
+          <div class="col-sm-6"><div class="headline headline-orange">
+            <div class="headline-label">Net hires needed by {{ horizon_label }}</div>
+            <div class="headline-value">{{ k.net_hire_horizon }} <small>FTE</small></div>
+            <div class="headline-note">Includes volume growth &middot; {{ money.budget_horizon }}/yr</div>
+          </div></div>
+          <div class="col-sm-6"><div class="headline headline-blue">
+            <div class="headline-label">Redeploy before you hire</div>
+            <div class="headline-value">{{ k.redeployable }} <small>FTE</small></div>
+            <div class="headline-note">Saves about {{ money.redeploy_savings }}/yr in hiring cost</div>
+          </div></div>
+          <div class="col-sm-6"><div class="headline headline-amber">
+            <div class="headline-label">Capacity above safe level</div>
+            <div class="headline-value">{{ k.idle_fte|num:1 }} <small>FTE</small></div>
+            <div class="headline-note">Worth about {{ money.idle_cost }}/yr</div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Row 2: KPI strip ===================== -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card kpi-gray"><div class="kpi-label">Workforce Today</div><div class="kpi-value">{{ k.total_current|num:1 }}</div><div class="kpi-note">FTE across {{ k.process_count }} processes, {{ k.function_count }} functions</div></div></div>
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card kpi-blue"><div class="kpi-label">Required Today</div><div class="kpi-value">{{ k.total_required|num:1 }}</div><div class="kpi-note">Safe staffing: {{ k.total_needed|num:0 }} FTE</div></div></div>
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card {% if k.org_utilization > config.util_upper %}kpi-red{% elif k.org_utilization < config.util_lower %}kpi-amber{% else %}kpi-green{% endif %}"><div class="kpi-label">Utilization</div><div class="kpi-value">{{ k.org_utilization|pct:1 }}</div><div class="kpi-note">Target {{ config.target_utilization|num:0 }}%</div></div></div>
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card kpi-red"><div class="kpi-label">Short Today</div><div class="kpi-value">{{ k.short_now_count }}</div><div class="kpi-note">of {{ k.process_count }} processes</div></div></div>
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card kpi-orange"><div class="kpi-label">Short by {{ horizon_label }}</div><div class="kpi-value">{{ k.short_future_count }}</div><div class="kpi-note">Fine today, short later</div></div></div>
+  <div class="col-6 col-md-4 col-xl-2"><div class="kpi-card kpi-purple"><div class="kpi-label">Needed by {{ horizon_label }}</div><div class="kpi-value">{{ k.total_needed_horizon|num:0 }}</div><div class="kpi-note">FTE vs {{ k.total_current|num:0 }} today</div></div></div>
+</div>
+
+<!-- ===================== Row 3: insights ===================== -->
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-lightbulb text-primary"></i> Key Insights</div>
+  <ul class="list-group list-group-flush insight-list">
+    {% for i in insights %}
+    <li class="list-group-item d-flex gap-3 align-items-start"><span class="insight-icon insight-{{ i.tone }}"><i class="bi {{ i.icon }}"></i></span><span>{{ i.text }}</span></li>
+    {% endfor %}
+  </ul>
+</div>
+
+<!-- ===================== Row 4: trajectory + FTE by status ===================== -->
+<div class="row g-4 mb-4">
+  <div class="col-xl-8"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-graph-up-arrow text-primary"></i> Headcount Outlook to {{ horizon_label }}</div>
+    <div class="card-body"><div class="chart-box chart-box-lg"><canvas data-chart="execTrajectory"></canvas></div>
+      <div class="small text-muted mt-2">Safe staffing = risk-adjusted P90 FTE (or operational FTE without Monte Carlo), including each process's volume growth. Processes without growth stay flat.</div></div>
+  </div></div>
+  <div class="col-xl-4"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-pie-chart text-primary"></i> Where Our People Sit</div>
+    <div class="card-body"><div class="chart-box chart-box-lg"><canvas data-chart="execFteStatus"></canvas></div>
+      <div class="small text-muted mt-2">Current FTE by today's manpower status.</div></div>
+  </div></div>
+</div>
+
+<!-- ===================== Row 5: function scorecard ===================== -->
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-diagram-3 text-primary"></i> Function Scorecard</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 exec-table">
+      <thead class="table-light"><tr>
+        <th>Function</th><th>Status</th><th class="text-end">Processes</th><th class="text-end">Current FTE</th><th class="text-end">Required FTE</th>
+        <th class="text-end">Utilization</th><th class="text-end">Hire Now</th><th class="text-end">Redeployable</th>
+        <th class="text-end">Needed by {{ horizon_label }}</th><th class="text-end">Hire by {{ horizon_label }}</th><th class="text-end no-print"></th></tr></thead>
+      <tbody>
+      {% for r in scorecard %}
+        <tr>
+          <td class="fw-semibold">{{ r.function }}</td>
+          <td><span class="rag-dot rag-{{ r.rag }}"></span> {{ r.rag_label }}</td>
+          <td class="text-end">{{ r.processes }}{% if r.short_now %} <span class="badge bg-danger" title="Short today">{{ r.short_now }}</span>{% endif %}{% if r.short_future %} <span class="badge bg-orange" title="Short in future">{{ r.short_future }}</span>{% endif %}</td>
+          <td class="text-end">{{ r.current|num:1 }}</td>
+          <td class="text-end">{{ r.required|num:1 }}</td>
+          <td class="text-end">{{ r.utilization|pct:1 }}</td>
+          <td class="text-end {% if r.hire_now %}text-danger fw-semibold{% else %}text-muted{% endif %}">{{ r.hire_now|num:0 }}</td>
+          <td class="text-end {% if r.redeployable %}text-primary fw-semibold{% else %}text-muted{% endif %}">{{ r.redeployable }}</td>
+          <td class="text-end">{{ r.needed_horizon|num:0 }}</td>
+          <td class="text-end {% if r.hire_horizon %}text-danger{% else %}text-muted{% endif %}">{{ r.hire_horizon|num:0 }}</td>
+          <td class="text-end no-print"><a href="{% url 'forecasting:dashboard' %}?q={{ r.function|urlencode }}" class="btn btn-sm btn-link">Drill down</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot class="table-light fw-semibold"><tr>
+        <td>Total</td><td></td><td class="text-end">{{ k.process_count }}</td><td class="text-end">{{ k.total_current|num:1 }}</td><td class="text-end">{{ k.total_required|num:1 }}</td>
+        <td class="text-end">{{ k.org_utilization|pct:1 }}</td><td class="text-end">{{ k.hire_now|num:0 }}</td><td class="text-end">{{ k.redeployable }}</td>
+        <td class="text-end">{{ k.total_needed_horizon|num:0 }}</td><td class="text-end">{{ k.hire_horizon|num:0 }}</td><td class="no-print"></td></tr></tfoot>
+    </table>
+  </div>
+  <div class="card-body border-top"><div class="chart-box"><canvas data-chart="execFunctions"></canvas></div></div>
+</div>
+
+<!-- ===================== Row 6: risks + risk matrix ===================== -->
+<div class="row g-4 mb-4">
+  <div class="col-xl-7"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-exclamation-triangle text-danger"></i> Top Risks &amp; Recommended Actions</div>
+    {% if risks %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light"><tr><th></th><th>Process</th><th>When</th><th>Issue</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for r in risks %}
+          <tr>
+            <td><span class="rag-dot rag-{{ r.severity }}"></span></td>
+            <td><a href="{% url 'forecasting:forecast_result' r.forecast_id %}" class="fw-semibold text-decoration-none">{{ r.process }}</a><div class="small text-muted">{{ r.function }}</div></td>
+            <td class="text-nowrap">{{ r.when }}</td>
+            <td class="small">{{ r.issue }}</td>
+            <td class="small fw-semibold">{{ r.action }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card-body text-success"><i class="bi bi-check-circle"></i> No material risks in the selected outlook.</div>
+    {% endif %}
+  </div></div>
+  <div class="col-xl-5"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-bullseye text-primary"></i> Risk Matrix</div>
+    <div class="card-body"><div class="chart-box chart-box-lg"><canvas data-chart="execRiskMatrix"></canvas></div>
+      <div class="small text-muted mt-2">Right = busier today. Low = sooner a shortage hits (0 = short now; top row = no shortage within the outlook). Bubble size = current FTE.</div></div>
+  </div></div>
+</div>
+
+<!-- ===================== Row 7: hiring plan + redeployment ===================== -->
+<div class="row g-4 mb-4">
+  <div class="col-xl-7"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-calendar-check text-primary"></i> Quarterly Hiring Plan (net of redeployment)</div>
+    <div class="card-body">
+      <div class="chart-box"><canvas data-chart="execHiringPlan"></canvas></div>
+      <div class="table-responsive mt-3">
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light"><tr><th>By</th><th class="text-end">New Hires</th><th class="text-end">Cumulative</th><th class="text-end">Added Annual Cost</th><th class="text-end">Cumulative Annual Cost</th></tr></thead>
+          <tbody>
+          {% for p in hiring_plan %}
+            <tr><td>{{ p.label }}</td><td class="text-end fw-semibold">{{ p.new_hires }}</td><td class="text-end">{{ p.cumulative_hires }}</td><td class="text-end">{{ cur }}{{ p.budget|num:0 }}</td><td class="text-end">{{ cur }}{{ p.cumulative_budget|num:0 }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div></div>
+  <div class="col-xl-5"><div class="card shadow-sm border-0 h-100">
+    <div class="card-header bg-white fw-semibold"><i class="bi bi-arrow-left-right text-primary"></i> Redeployment Opportunities</div>
+    {% if moves %}
+    <ul class="list-group list-group-flush">
+      {% for m in moves %}
+      <li class="list-group-item">
+        <div class="d-flex justify-content-between align-items-center">
+          <div><span class="badge bg-primary me-2">{{ m.fte }} FTE</span><strong>{{ m.from_process }}</strong> <i class="bi bi-arrow-right"></i> <strong>{{ m.to_process }}</strong></div>
+          <span class="badge {% if m.same_function %}bg-success-subtle text-success-emphasis{% else %}bg-warning-subtle text-warning-emphasis{% endif %}">{% if m.same_function %}Same function{% else %}Cross-function{% endif %}</span>
+        </div>
+        <div class="small text-muted">{{ m.from_function }}{% if not m.same_function %} &rarr; {{ m.to_function }}{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="card-body small text-muted border-top">Moves people from over-staffed processes (utilization below {{ config.util_lower|num:0 }}%) to processes that are short today, keeping every donor at or above its safe staffing level. Cross-function moves may need training.</div>
+    {% else %}
+    <div class="card-body text-muted">No redeployment moves available: either nothing is short today or no process has surplus people above its safe staffing level.</div>
+    {% endif %}
+  </div></div>
+</div>
+
+<!-- ===================== Methodology ===================== -->
+<details class="card shadow-sm border-0 mb-4 methodology">
+  <summary class="card-header bg-white fw-semibold"><i class="bi bi-info-circle text-primary"></i> How these numbers are calculated</summary>
+  <div class="card-body small">
+    <ul class="mb-0">
+      <li>Each process uses its <strong>latest forecast</strong>. {{ k.mc_count }} of {{ k.process_count }} include Monte Carlo; {{ k.projection_count }} include a growth projection.</li>
+      <li><strong>Safe staffing</strong> = ceil(P90 FTE) with Monte Carlo, otherwise ceil(required FTE).</li>
+      <li><strong>Hire now</strong> = safe staffing &minus; current FTE for processes below it. <strong>Redeployable</strong> = whole people above safe staffing in over-staffed processes. <strong>Net hires</strong> = hire now &minus; redeployable (not below 0).</li>
+      <li><strong>Hires by {{ horizon_label }}</strong> use each process's safe staffing at that month (projected volume, current FTE fixed).</li>
+      <li><strong>Budget</strong> = net hires &times; {{ money.cost_per_fte }} per FTE per year. <strong>Capacity above safe level</strong> = FTE above safe staffing &times; cost per FTE.</li>
+      <li><strong>Health score</strong> = 40% Coverage + 30% Efficiency (100 &minus; 2 &times; |utilization &minus; {{ config.target_utilization|num:0 }}%|) + 30% Resilience. 75+ is healthy, 50&ndash;74 needs attention, below 50 is at risk.</li>
+    </ul>
+  </div>
+</details>
+
+{{ chart_data|json_script:"chart-data" }}
+{% endif %}
+{% endwith %}
+{% endblock %}

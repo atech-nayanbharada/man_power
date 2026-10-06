@@ -12,12 +12,13 @@ from django.views import View
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
 from . import permissions as perms
-from .forms import (DEFAULT_SCENARIOS, ApprovalForm, BulkUploadForm, ForecastFilterForm, FunctionMasterForm,
-                    ManpowerForecastForm, ProcessMasterForm, ScenarioBaseForm, ScenarioFormSet)
+from .forms import (DEFAULT_SCENARIOS, ApprovalForm, BulkUploadForm, ExecutiveFilterForm, ForecastFilterForm,
+                    FunctionMasterForm, ManpowerForecastForm, ProcessMasterForm, ScenarioBaseForm, ScenarioFormSet)
 from .models import ApprovalStatus, ForecastAuditLog, FunctionMaster, ManpowerForecast, ProcessMaster
 from .permissions import ROLE_ADMIN, ROLE_ANALYST, ROLE_APPROVER, RoleRequiredMixin
 from .services import excel_service
 from .services.dashboard_service import build_dashboard
+from .services.executive_service import build_executive, exec_config
 from .services.forecast_service import build_input, log_action, save_forecast, serialize_forecast
 from .services.scenario_service import compare_scenarios
 
@@ -90,7 +91,7 @@ def forecast_context(user, forecast):
     }
 
 
-# ============================================================ Dashboard
+# ============================================================ Dashboards
 class DashboardView(RoleRequiredMixin, TemplateView):
     template_name = "forecasting/dashboard.html"
 
@@ -105,6 +106,43 @@ class DashboardView(RoleRequiredMixin, TemplateView):
                                 .exclude(created_by=self.request.user).count()
                                 if perms.can_review(self.request.user) else 0)
         return ctx
+
+
+def executive_data(request):
+    """Shared by the executive page and its Excel export."""
+    defaults = exec_config()
+    form = ExecutiveFilterForm(request.GET or None, initial={"horizon": defaults["horizon"],
+                                                              "cost_per_fte": defaults["cost_per_fte"]})
+    function, horizon, cost, approved_only = form.values(defaults)
+    qs = perms.visible_forecasts(request.user, ManpowerForecast.objects.all())
+    if function:
+        qs = qs.filter(function=function)
+    if approved_only:
+        qs = qs.filter(approval_status=ApprovalStatus.APPROVED)
+    data = build_executive(qs, timezone.localdate(), cost_per_fte=cost, horizon=horizon)
+    parts = [f"Function: {function}" if function else "All functions",
+             "Approved forecasts only" if approved_only else "All visible forecasts"]
+    return form, data, " | ".join(parts)
+
+
+class ExecutiveDashboardView(RoleRequiredMixin, View):
+    """CEO-level summary: health score, hiring need and budget, risks, redeployment and outlook."""
+    template_name = "forecasting/executive.html"
+
+    def get(self, request):
+        form, data, filters_text = executive_data(request)
+        return render(request, self.template_name, {
+            "form": form, "filters_text": filters_text, "export_query": request.GET.urlencode(),
+            "today": timezone.localdate(), **data,
+        })
+
+
+class ExecutiveExportView(RoleRequiredMixin, View):
+    def get(self, request):
+        _, data, filters_text = executive_data(request)
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M")
+        return xlsx_response(excel_service.export_executive(data, filters_text),
+                             f"executive_workforce_summary_{stamp}.xlsx")
 
 
 # ============================================================ Forecast CRUD

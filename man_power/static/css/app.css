@@ -29,6 +29,8 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 /* ============ Status colours ============ */
 .bg-amber { background-color: var(--amber) !important; color: #212529 !important; }
 .bg-orange { background-color: var(--orange) !important; color: #fff !important; }
+.bg-purple { background-color: var(--purple) !important; }
+.text-amber { color: #b98500 !important; }
 .alert-orange { background: #fff1e6; border-color: #ffd2ad; color: #8a4103; }
 .status-badge { font-weight: 600; padding: 0.4em 0.65em; }
 .method-badge { font-weight: 500; padding: 0.35em 0.6em; }
@@ -112,6 +114,37 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .projection-table tr.row-shortfall td { background: #fff1e6; border-top: 2px solid var(--orange); }
 .scenario-table th:first-child { white-space: nowrap; background: var(--gray-50); }
 
+/* ============ Executive dashboard ============ */
+.gauge-wrap { position: relative; height: 170px; margin-bottom: 0.75rem; }
+.gauge-value { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: 2.6rem; font-weight: 800; line-height: 1; }
+.gauge-value small { font-size: 0.9rem; font-weight: 600; color: var(--gray-600); }
+.pillar { margin-bottom: 0.7rem; }
+.pillar .progress { height: 0.5rem; margin: 0.25rem 0; }
+.pillar .progress-bar { width: 0; transition: width 0.6s ease; }
+.pillar-note { font-size: 0.72rem; color: var(--gray-600); }
+.headline { border-radius: 0.6rem; padding: 1rem 1.1rem; height: 100%; border: 1px solid var(--gray-200); background: #fff; }
+.headline-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; color: var(--gray-600); }
+.headline-value { font-size: 2.2rem; font-weight: 800; line-height: 1.1; margin: 0.2rem 0; }
+.headline-value small { font-size: 0.95rem; font-weight: 600; color: var(--gray-600); }
+.headline-note { font-size: 0.8rem; color: var(--gray-600); }
+.headline-red { border-left: 5px solid var(--red); } .headline-red .headline-value { color: var(--red); }
+.headline-orange { border-left: 5px solid var(--orange); } .headline-orange .headline-value { color: #c35d07; }
+.headline-blue { border-left: 5px solid var(--brand); } .headline-blue .headline-value { color: var(--brand); }
+.headline-amber { border-left: 5px solid var(--amber); } .headline-amber .headline-value { color: #b98500; }
+.insight-list .list-group-item { padding: 0.75rem 1rem; }
+.insight-icon { width: 2rem; height: 2rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 2rem; }
+.insight-danger { background: #f8d7da; color: var(--red); }
+.insight-success { background: #d1e7dd; color: var(--green); }
+.insight-info, .insight-primary { background: var(--brand-light); color: var(--brand); }
+.insight-orange { background: #fff1e6; color: #c35d07; }
+.insight-amber { background: #fff3cd; color: #997404; }
+.rag-dot { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; vertical-align: middle; }
+.rag-danger { background: var(--red); } .rag-amber { background: var(--amber); } .rag-success { background: var(--green); }
+.rag-info { background: #0dcaf0; } .rag-orange { background: var(--orange); }
+.exec-table td, .exec-table th { white-space: nowrap; }
+.methodology summary { cursor: pointer; list-style: none; }
+.methodology summary::-webkit-details-marker { display: none; }
+
 /* ============ Charts ============ */
 .chart-box { position: relative; height: 300px; width: 100%; }
 .chart-box-lg { height: 360px; }
@@ -131,3 +164,16 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .login-card { width: 100%; max-width: 420px; border-radius: 0.9rem; }
 .login-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--brand-light); color: var(--brand);
   display: inline-flex; align-items: center; justify-content: center; font-size: 1.9rem; }
+
+/* ============ Print (Executive dashboard -> PDF) ============ */
+@media print {
+  .sidebar, .sidebar-backdrop, .topbar, .footer, .no-print, .messages, .btn { display: none !important; }
+  .main-area { margin-left: 0 !important; }
+  .content { padding: 0 !important; }
+  body { background: #fff; font-size: 11px; }
+  .card { box-shadow: none !important; border: 1px solid #ddd !important; break-inside: avoid; }
+  .chart-box, .chart-box-lg { height: 260px; }
+  .methodology { display: block; }
+  .methodology .card-body { display: block !important; }
+  a { text-decoration: none; color: inherit; }
+}

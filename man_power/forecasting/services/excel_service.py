@@ -52,6 +52,7 @@ WRAP = Alignment(vertical="top", wrap_text=True)
 GROUP_FILLS = {"Input Values": "2E75B6", "Deterministic Results": "548235",
                "Monte Carlo Results": "7030A0", "Growth Projection": "0E7C86", "Outcome": "C55A11"}
 STATUS_FILLS = {"Less Manpower": "F8D7DA", "Sufficient Manpower": "D1E7DD", "Higher Manpower": "FFE8B3"}
+RAG_FILLS = {"danger": "F8D7DA", "amber": "FFE8B3", "success": "D1E7DD", "info": "CFE2FF"}
 NOT_RUN = "Not run"
 NO_GROWTH = "No growth"
 NOT_RUN_FONT = Font(italic=True, color="808080")
@@ -561,4 +562,106 @@ def export_forecast_detail(forecast):
     ws.column_dimensions["B"].width = 80
     if forecast.has_projection:
         _write_projection_sheet(wb, [forecast], title="Month-by-Month Projection")
+    return workbook_bytes(wb)
+
+
+# ------------------------------------------------------------------ Executive summary export
+def _table(ws, start_row, headers, rows, number_cols=(), pct_cols=(), money_cols=(), rag_col=None, rag_values=None):
+    for c, h in enumerate(headers, start=1):
+        ws.cell(row=start_row, column=c, value=h)
+    style_header_row(ws, start_row, 1, len(headers))
+    for i, values in enumerate(rows, start=1):
+        for c, v in enumerate(values, start=1):
+            cell = ws.cell(row=start_row + i, column=c, value=v)
+            cell.border = BORDER
+            if c in number_cols:
+                cell.number_format = "#,##0.00"
+            elif c in pct_cols:
+                cell.number_format = '0.0"%"'
+            elif c in money_cols:
+                cell.number_format = "#,##0"
+        if rag_col and rag_values:
+            fill = RAG_FILLS.get(rag_values[i - 1])
+            if fill:
+                ws.cell(row=start_row + i, column=rag_col).fill = PatternFill("solid", fgColor=fill)
+    return start_row + len(rows) + 2
+
+
+def export_executive(data, filters_text=""):
+    """Board-ready workbook: summary KPIs, insights, function scorecard, risks, hiring plan, redeployment."""
+    k, s, cfg, cur = data["kpis"], data["score"], data["config"], data["config"]["currency"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Executive Summary"
+    ws["A1"] = "Workforce Capacity - Executive Summary"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = (f"Generated {timezone.localtime().strftime('%d-%b-%Y %H:%M')} | Outlook to {data['horizon_label']} "
+                f"| Cost per FTE {cur}{cfg['cost_per_fte']:,.0f}" + (f" | {filters_text}" if filters_text else ""))
+    ws["A2"].font = NOT_RUN_FONT
+    kpi_rows = [
+        ("Capacity Health Score (0-100)", s["score"]),
+        ("  Coverage (40%)", s["coverage"]),
+        ("  Efficiency (30%)", s["efficiency"]),
+        ("  Resilience (30%)", s["resilience"]),
+        ("Functions / Processes", f"{k['function_count']} / {k['process_count']}"),
+        ("Current FTE", float(k["total_current"])),
+        ("Required FTE today", float(k["total_required"])),
+        ("Organisation utilization %", float(k["org_utilization"]) if k["org_utilization"] is not None else None),
+        ("Processes short today", k["short_now_count"]),
+        (f"Processes short by {data['horizon_label']}", k["short_future_count"]),
+        ("Hiring need today (gross FTE)", float(k["hire_now"])),
+        ("Redeployable FTE", k["redeployable"]),
+        ("Net hiring need today (FTE)", k["net_hire_now"]),
+        (f"Net hiring need by {data['horizon_label']} (FTE)", k["net_hire_horizon"]),
+        ("Annual budget for today's net hires", float(k["budget_now"])),
+        (f"Annual budget for net hires by {data['horizon_label']}", float(k["budget_horizon"])),
+        ("Annual cost of unused capacity", float(k["idle_cost"])),
+        ("Hiring cost avoided through redeployment", float(k["redeploy_savings"])),
+    ]
+    row = _table(ws, 4, ["Metric", "Value"], kpi_rows)
+    for r in range(5, 5 + len(kpi_rows)):
+        label = str(ws.cell(row=r, column=1).value).lower()
+        if "budget" in label or "cost" in label:
+            ws.cell(row=r, column=2).number_format = "#,##0"
+    ws.cell(row=5, column=2).fill = PatternFill("solid", fgColor=RAG_FILLS.get(s["rag"], "FFFFFF"))
+    ws.cell(row=row, column=1, value="Key Insights").font = Font(bold=True, size=12, color=BRAND)
+    row += 1
+    for ins in data["insights"]:
+        ws.cell(row=row, column=1, value=f"• {ins['text']}").alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.row_dimensions[row].height = 32
+        row += 1
+    ws.column_dimensions["A"].width = 48
+    ws.column_dimensions["B"].width = 20
+
+    sc = wb.create_sheet("Function Scorecard")
+    rows = [(r["function"], r["rag_label"], r["processes"], float(r["current"]), float(r["required"]),
+             float(r["utilization"]) if r["utilization"] is not None else None, float(r["net_gap"]),
+             float(r["hire_now"]), r["redeployable"], float(r["needed_horizon"]), float(r["hire_horizon"]),
+             r["short_now"], r["short_future"]) for r in data["scorecard"]]
+    _table(sc, 1, ["Function", "RAG", "Processes", "Current FTE", "Required FTE", "Utilization %", "Net Gap",
+                   "Hire Now", "Redeployable", f"FTE Needed {data['horizon_label']}",
+                   f"Hire by {data['horizon_label']}", "Short Now", "Short in Future"], rows,
+           number_cols=(4, 5, 7, 8, 10, 11), pct_cols=(6,), rag_col=2,
+           rag_values=[r["rag"] for r in data["scorecard"]])
+    autosize(sc, min_width=12)
+
+    rk = wb.create_sheet("Top Risks")
+    _table(rk, 1, ["Process", "Function", "When", "Issue", "Recommended Action"],
+           [(r["process"], r["function"], r["when"], r["issue"], r["action"]) for r in data["risks"]],
+           rag_col=3, rag_values=[{"orange": "amber"}.get(r["severity"], r["severity"]) for r in data["risks"]])
+    autosize(rk, min_width=12, max_width=70)
+
+    hp = wb.create_sheet("Hiring Plan")
+    _table(hp, 1, ["By", "Month", "Cumulative Net Hires", "New Hires in Period", "Period Budget",
+                   "Cumulative Annual Budget"],
+           [(p["label"], p["month"], p["cumulative_hires"], p["new_hires"], float(p["budget"]),
+             float(p["cumulative_budget"])) for p in data["hiring_plan"]], money_cols=(5, 6))
+    autosize(hp, min_width=14)
+
+    rd = wb.create_sheet("Redeployment")
+    _table(rd, 1, ["Move FTE", "From Process", "From Function", "To Process", "To Function", "Type"],
+           [(m["fte"], m["from_process"], m["from_function"], m["to_process"], m["to_function"],
+             "Within function" if m["same_function"] else "Cross-function") for m in data["moves"]])
+    autosize(rd, min_width=12)
     return workbook_bytes(wb)

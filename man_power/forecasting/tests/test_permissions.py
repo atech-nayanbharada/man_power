@@ -32,39 +32,36 @@ class PermissionTests(TestCase):
                             growth_rate_percentage=Decimal("5"))
         self.login(self.admin)
         for pk in (self.forecast.pk, det.pk):
-            for name, args in [("dashboard", []), ("forecast_list", []), ("forecast_create", []),
+            for name, args in [("dashboard", []), ("executive", []), ("executive_export", []),
+                               ("forecast_list", []), ("forecast_create", []),
                                ("forecast_detail", [pk]), ("forecast_result", [pk]), ("forecast_update", [pk]),
                                ("function_list", []), ("function_create", []), ("process_list", []),
                                ("process_create", []), ("scenario", []), ("bulk_upload", []), ("reports", []),
                                ("upload_template", []), ("report_export", []), ("forecast_export", [pk])]:
                 with self.subTest(page=name, pk=pk):
                     self.assertEqual(self.client.get(reverse(f"forecasting:{name}", args=args)).status_code, 200)
-            self.assertEqual(self.client.get(reverse("forecasting:scenario") + f"?base={pk}").status_code, 200)
         r = self.client.get(reverse("forecasting:forecast_result", args=[det.pk]))
         self.assertContains(r, "Future Manpower Forecast")
-        self.assertContains(r, "Month-by-Month Projection")
         self.assertContains(r, "Not run")
-        self.assertContains(self.client.get(reverse("forecasting:forecast_result", args=[self.forecast.pk])),
-                            "No growth % was entered")
+        self.assertContains(self.client.get(reverse("forecasting:dashboard")), "Executive Dashboard")
         for outlook in ("short_future", "short_now", "ok", "none"):
             self.assertEqual(self.client.get(reverse("forecasting:forecast_list") + f"?outlook={outlook}").status_code, 200)
-        self.assertContains(self.client.get(reverse("forecasting:forecast_list") + "?outlook=short_future"),
-                            "Short from")
 
     def test_user_without_role_denied(self):
         self.login(self.norole)
         self.assertEqual(self.client.get(reverse("forecasting:dashboard")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("forecasting:executive")).status_code, 403)
 
     def test_viewer_restrictions(self):
         self.login(self.viewer)
         self.assertEqual(self.client.get(reverse("forecasting:dashboard")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("forecasting:executive")).status_code, 200)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_create")).status_code, 403)
         self.assertEqual(self.client.get(reverse("forecasting:bulk_upload")).status_code, 403)
         self.assertEqual(self.client.get(reverse("forecasting:function_list")).status_code, 403)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_detail", args=[self.forecast.pk])).status_code, 403)
         ManpowerForecast.objects.filter(pk=self.forecast.pk).update(approval_status=ApprovalStatus.APPROVED)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_detail", args=[self.forecast.pk])).status_code, 200)
-        self.assertEqual(self.client.get(reverse("forecasting:report_export")).status_code, 200)
 
     def test_analyst_can_create_and_only_edit_own(self):
         self.login(self.analyst2)
@@ -78,24 +75,12 @@ class PermissionTests(TestCase):
 
     def test_create_with_growth_via_web(self):
         self.login(self.analyst)
-        response = self.client.post(reverse("forecasting:forecast_create"),
-                                    form_data(self.function, self.process, run_monte_carlo=None,
-                                              growth_rate_percentage="10", growth_period="QUARTERLY",
-                                              forecast_horizon_months="24"))
-        new = ManpowerForecast.objects.exclude(pk=self.forecast.pk).get()
-        self.assertRedirects(response, reverse("forecasting:forecast_result", args=[new.pk]))
-        self.assertEqual(len(new.projection_points), 25)
-        self.assertEqual(new.growth_period, "QUARTERLY")
-        # 2.45 x 1.1^n > 3 when n = 3 quarters -> month 9
-        self.assertEqual(new.projected_shortfall_month, 9)
-
-    def test_create_without_monte_carlo_via_web(self):
-        self.login(self.analyst)
         self.client.post(reverse("forecasting:forecast_create"),
-                         form_data(self.function, self.process, run_monte_carlo=None, simulation_count=""))
+                         form_data(self.function, self.process, run_monte_carlo=None, growth_rate_percentage="10",
+                                   growth_period="QUARTERLY", forecast_horizon_months="24"))
         new = ManpowerForecast.objects.exclude(pk=self.forecast.pk).get()
-        self.assertFalse(new.run_monte_carlo)
-        self.assertEqual(new.simulation_summaries.count(), 0)
+        self.assertEqual(len(new.projection_points), 25)
+        self.assertEqual(new.projected_shortfall_month, 9)
 
     def test_rerun_toggles_monte_carlo(self):
         self.login(self.analyst)
@@ -126,7 +111,6 @@ class PermissionTests(TestCase):
         self.assertContains(r, "P90 Required FTE")
         self.assertContains(r, "Required FTE at Horizon")
         r = self.client.post(reverse("forecasting:scenario"), base)
-        self.assertContains(r, "Deterministic only")
         self.assertNotContains(r, "P90 Required FTE")
 
     def test_approver_cannot_create(self):

@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% load forecast_tags %}
-{% block title %}Dashboard{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
+{% block title %}Operations Dashboard{% endblock %}
+{% block page_title %}Operations Dashboard{% endblock %}
 {% block content %}
+<div class="d-flex justify-content-end mb-3">
+  <a href="{% url 'forecasting:executive' %}" class="btn btn-outline-primary btn-sm"><i class="bi bi-briefcase"></i> Executive view</a>
+</div>
 {% if pending_count %}
 <div class="alert alert-info d-flex justify-content-between align-items-center">
   <span><i class="bi bi-hourglass-split"></i> {{ pending_count }} forecast(s) are waiting for your approval.</span>
