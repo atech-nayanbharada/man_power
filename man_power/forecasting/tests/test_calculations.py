@@ -96,13 +96,23 @@ class DeterministicCalculationTests(SimpleTestCase):
         inp = ForecastInput(frequency="DAILY", volume=1, current_fte=1, avg_processing_time=1,
                             run_monte_carlo=False, volume_variation_percentage=None, time_variation_percentage=None,
                             simulation_count=None, growth_rate_percentage=None, growth_period=None,
-                            forecast_horizon_months=None)
+                            forecast_horizon_months=None, aht_change_percentage=None, aht_change_period=None)
         self.assertEqual(inp.volume_variation_percentage, Decimal("10"))
         self.assertEqual(inp.simulation_count, 10000)
         self.assertEqual(inp.growth_rate_percentage, Decimal("0"))
+        self.assertEqual(inp.aht_change_percentage, Decimal("0"))
         self.assertEqual(inp.growth_period, "MONTHLY")
+        self.assertEqual(inp.aht_change_period, "MONTHLY")
         self.assertEqual(inp.forecast_horizon_months, 12)
         self.assertFalse(inp.has_growth)
+
+    def test_has_growth_flags(self):
+        base = dict(frequency="DAILY", volume=1, current_fte=1, avg_processing_time=1)
+        self.assertTrue(ForecastInput(**base, growth_rate_percentage=5).has_growth)
+        aht_only = ForecastInput(**base, aht_change_percentage=-3)
+        self.assertTrue(aht_only.has_growth)
+        self.assertTrue(aht_only.has_aht_change)
+        self.assertFalse(aht_only.has_volume_growth)
 
     def test_fmt(self):
         self.assertEqual(fmt(Decimal("3.00")), "3")

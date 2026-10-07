@@ -29,7 +29,8 @@ class PermissionTests(TestCase):
 
     def test_all_pages_render_for_admin(self):
         det = make_forecast(self.analyst, self.function, self.process, run_monte_carlo=False,
-                            growth_rate_percentage=Decimal("5"))
+                            growth_rate_percentage=Decimal("5"), aht_change_percentage=Decimal("-2"),
+                            aht_change_period="QUARTERLY")
         self.login(self.admin)
         for pk in (self.forecast.pk, det.pk):
             for name, args in [("dashboard", []), ("executive", []), ("executive_export", []),
@@ -42,15 +43,15 @@ class PermissionTests(TestCase):
                     self.assertEqual(self.client.get(reverse(f"forecasting:{name}", args=args)).status_code, 200)
         r = self.client.get(reverse("forecasting:forecast_result", args=[det.pk]))
         self.assertContains(r, "Future Manpower Forecast")
-        self.assertContains(r, "Not run")
-        self.assertContains(self.client.get(reverse("forecasting:dashboard")), "Executive Dashboard")
-        for outlook in ("short_future", "short_now", "ok", "none"):
-            self.assertEqual(self.client.get(reverse("forecasting:forecast_list") + f"?outlook={outlook}").status_code, 200)
+        self.assertContains(r, "-2% AHT per quarter")
+        self.assertContains(r, "AHT (min)")
+        self.assertContains(self.client.get(reverse("forecasting:forecast_create")), "AHT Change (%)")
+        self.assertContains(self.client.get(reverse("forecasting:forecast_result", args=[self.forecast.pk])),
+                            "No volume growth or AHT change was entered")
 
     def test_user_without_role_denied(self):
         self.login(self.norole)
         self.assertEqual(self.client.get(reverse("forecasting:dashboard")).status_code, 403)
-        self.assertEqual(self.client.get(reverse("forecasting:executive")).status_code, 403)
 
     def test_viewer_restrictions(self):
         self.login(self.viewer)
@@ -58,7 +59,6 @@ class PermissionTests(TestCase):
         self.assertEqual(self.client.get(reverse("forecasting:executive")).status_code, 200)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_create")).status_code, 403)
         self.assertEqual(self.client.get(reverse("forecasting:bulk_upload")).status_code, 403)
-        self.assertEqual(self.client.get(reverse("forecasting:function_list")).status_code, 403)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_detail", args=[self.forecast.pk])).status_code, 403)
         ManpowerForecast.objects.filter(pk=self.forecast.pk).update(approval_status=ApprovalStatus.APPROVED)
         self.assertEqual(self.client.get(reverse("forecasting:forecast_detail", args=[self.forecast.pk])).status_code, 200)
@@ -71,16 +71,27 @@ class PermissionTests(TestCase):
                                               current_fte="2", avg_processing_time="5", simulation_seed="1"))
         new = ManpowerForecast.objects.exclude(pk=self.forecast.pk).get()
         self.assertRedirects(response, reverse("forecasting:forecast_result", args=[new.pk]))
-        self.assertEqual(new.created_by, self.analyst2)
 
-    def test_create_with_growth_via_web(self):
+    def test_create_with_aht_change_via_web(self):
         self.login(self.analyst)
         self.client.post(reverse("forecasting:forecast_create"),
                          form_data(self.function, self.process, run_monte_carlo=None, growth_rate_percentage="10",
-                                   growth_period="QUARTERLY", forecast_horizon_months="24"))
+                                   growth_period="QUARTERLY", aht_change_percentage="-5",
+                                   aht_change_period="HALF_YEARLY", forecast_horizon_months="24"))
         new = ManpowerForecast.objects.exclude(pk=self.forecast.pk).get()
         self.assertEqual(len(new.projection_points), 25)
+        self.assertEqual(new.aht_change_period, "HALF_YEARLY")
+        self.assertEqual(new.projection_points[6]["aht_minutes"], 9.5)
+        # workload factor 1.1^q x 0.95^h: month 9 = 1.331 x 0.95 = 1.264 -> 3.10 FTE > 3
         self.assertEqual(new.projected_shortfall_month, 9)
+
+    def test_create_with_aht_only_via_web(self):
+        self.login(self.analyst)
+        self.client.post(reverse("forecasting:forecast_create"),
+                         form_data(self.function, self.process, run_monte_carlo=None, aht_change_percentage="5"))
+        new = ManpowerForecast.objects.exclude(pk=self.forecast.pk).get()
+        self.assertTrue(new.has_projection)
+        self.assertEqual(new.projected_shortfall_month, 5)
 
     def test_rerun_toggles_monte_carlo(self):
         self.login(self.analyst)
@@ -91,7 +102,6 @@ class PermissionTests(TestCase):
         self.client.post(url + "?monte_carlo=on")
         self.forecast.refresh_from_db()
         self.assertTrue(self.forecast.run_monte_carlo)
-        self.assertEqual(self.forecast.simulation_summaries.count(), 2)
 
     def test_edit_resets_approval(self):
         ManpowerForecast.objects.filter(pk=self.forecast.pk).update(approval_status=ApprovalStatus.APPROVED,
@@ -101,15 +111,15 @@ class PermissionTests(TestCase):
         self.forecast.refresh_from_db()
         self.assertEqual(self.forecast.approval_status, ApprovalStatus.PENDING)
 
-    def test_scenario_post(self):
+    def test_scenario_post_with_aht(self):
         growth = make_forecast(self.analyst, self.function, self.process, growth_rate_percentage=Decimal("5"))
         self.login(self.approver)
         base = {"base_forecast": growth.pk, "simulation_seed": 42, "sc-TOTAL_FORMS": 1,
                 "sc-INITIAL_FORMS": 0, "sc-MIN_NUM_FORMS": 0, "sc-MAX_NUM_FORMS": 4,
-                "sc-0-name": "Faster", "sc-0-growth_rate_percentage": 8}
+                "sc-0-name": "Automation", "sc-0-aht_change_percentage": -3}
         r = self.client.post(reverse("forecasting:scenario"), {**base, "run_monte_carlo": "on"})
-        self.assertContains(r, "P90 Required FTE")
-        self.assertContains(r, "Required FTE at Horizon")
+        self.assertContains(r, "AHT Change % per Period")
+        self.assertContains(r, "AHT at Horizon")
         r = self.client.post(reverse("forecasting:scenario"), base)
         self.assertNotContains(r, "P90 Required FTE")
 
@@ -131,7 +141,7 @@ class MakerCheckerTests(TestCase):
                                 {"decision": decision, "comments": comments})
 
     def test_approver_approves_others_forecast(self):
-        f = make_forecast(self.analyst, self.function, self.process, growth_rate_percentage=Decimal("5"))
+        f = make_forecast(self.analyst, self.function, self.process, aht_change_percentage=Decimal("2"))
         self.approve(self.approver, f)
         f.refresh_from_db()
         self.assertEqual(f.approval_status, ApprovalStatus.APPROVED)

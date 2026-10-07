@@ -13,7 +13,7 @@
       <div class="col-md-3 mb-3">{% include "partials/_switch.html" with field=base_form.run_monte_carlo %}</div>
       <div class="col-md-3" data-mc-fields>{% include "partials/_field.html" with field=base_form.simulation_seed %}</div>
     </div>
-    <div class="form-text">Leave a field blank to keep the base value. "Volume change today" is a one-off change to current volume; "Ongoing growth %" replaces the base forecast's growth rate for the future projection. Switch off Monte Carlo to compare deterministic results only.</div></div>
+    <div class="form-text">Leave a field blank to keep the base value. "Change today" fields are one-off changes to current volume or AHT; "Ongoing" fields replace the base forecast's volume growth % or AHT change % for the future projection. Switch off Monte Carlo to compare deterministic results only.</div></div>
   </div>
 
   {% if formset.non_form_errors %}<div class="alert alert-danger">{{ formset.non_form_errors }}</div>{% endif %}
@@ -62,7 +62,7 @@
       <thead class="table-light"><tr><th>Metric</th>{% for r in rows %}<th class="text-center">{{ r.name }}</th>{% endfor %}</tr></thead>
       <tbody>
         <tr><th>Volume</th>{% for r in rows %}<td class="text-center">{{ r.volume|num }}</td>{% endfor %}</tr>
-        <tr><th>Avg Processing Time</th>{% for r in rows %}<td class="text-center">{{ r.avg_processing_time|num }}</td>{% endfor %}</tr>
+        <tr><th>AHT (as entered)</th>{% for r in rows %}<td class="text-center">{{ r.avg_processing_time|num }}</td>{% endfor %}</tr>
         <tr><th>Contingency</th>{% for r in rows %}<td class="text-center">{{ r.contingency_percentage|pct }}</td>{% endfor %}</tr>
         <tr><th>Current / Proposed FTE</th>{% for r in rows %}<td class="text-center">{{ r.current_fte|num }}</td>{% endfor %}</tr>
         <tr class="table-primary"><th>Required FTE</th>{% for r in rows %}<td class="text-center fw-semibold">{{ r.required_fte|num }}</td>{% endfor %}</tr>
@@ -77,7 +77,9 @@
         <tr><th>FTE Gap</th>{% for r in rows %}<td class="text-center {{ r.fte_gap|gap_css }}">{{ r.fte_gap|signed }}</td>{% endfor %}</tr>
         <tr><th>Status Today</th>{% for r in rows %}<td class="text-center"><span class="badge status-badge bg-{{ r.status_css }}">{{ r.status_label }}</span>{% if r.high_risk %}<br><span class="badge status-badge bg-orange mt-1">High Utilization Risk</span>{% endif %}</td>{% endfor %}</tr>
         {% if scenario_projection %}
-        <tr class="table-info"><th>Growth % per Period</th>{% for r in rows %}<td class="text-center">{% if r.has_projection %}{{ r.growth_rate_percentage|signed }}%{% else %}None{% endif %}</td>{% endfor %}</tr>
+        <tr class="table-info"><th>Volume Growth % per Period</th>{% for r in rows %}<td class="text-center">{{ r.growth_rate_percentage|signed }}%</td>{% endfor %}</tr>
+        <tr class="table-info"><th>AHT Change % per Period</th>{% for r in rows %}<td class="text-center">{{ r.aht_change_percentage|signed }}%</td>{% endfor %}</tr>
+        <tr><th>AHT at Horizon (min)</th>{% for r in rows %}<td class="text-center">{% if r.has_projection %}{{ r.horizon_aht|num }}{% else %}-{% endif %}</td>{% endfor %}</tr>
         <tr><th>More Manpower Needed From</th>{% for r in rows %}<td class="text-center">{{ r.shortfall_label|default:"-" }}</td>{% endfor %}</tr>
         <tr><th>Required FTE at Horizon</th>{% for r in rows %}<td class="text-center">{% if r.has_projection %}{{ r.horizon_required_fte|num }} <span class="small text-muted">({{ r.horizon_label }})</span>{% else %}-{% endif %}</td>{% endfor %}</tr>
         <tr><th>FTE Needed at Horizon</th>{% for r in rows %}<td class="text-center fw-semibold">{% if r.has_projection %}{{ r.horizon_fte_needed|num:0 }}{% else %}-{% endif %}</td>{% endfor %}</tr>

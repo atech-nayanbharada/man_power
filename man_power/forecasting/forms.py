@@ -23,6 +23,8 @@ HORIZON_MAX = CFG.get("HORIZON_MAX", 60)
 MC_FIELDS = ("volume_variation_percentage", "time_variation_percentage", "simulation_count", "simulation_seed")
 MC_DEFAULTS = {"volume_variation_percentage": Decimal("10"), "time_variation_percentage": Decimal("15"),
                "simulation_count": 10000, "simulation_seed": None}
+GROWTH_FIELDS = ("growth_rate_percentage", "growth_period", "forecast_horizon_months",
+                 "aht_change_percentage", "aht_change_period")
 
 MESSAGES = {
     "volume": "Volume must be greater than zero.",
@@ -36,7 +38,8 @@ MESSAGES = {
     "time_variation_percentage": "Processing time variation percentage cannot be negative.",
     "simulation_count": f"Simulation count must be between {SIM_MIN:,} and {SIM_MAX:,}.",
     "simulation_seed": "Simulation seed must be zero or a positive whole number.",
-    "growth_rate_percentage": "Growth % must be greater than -100% and not more than 1000%.",
+    "growth_rate_percentage": "Volume growth % must be greater than -100% and not more than 1000%.",
+    "aht_change_percentage": "AHT change % must be greater than -100% and not more than 1000%.",
     "forecast_horizon_months": f"Forecast horizon must be between 1 and {HORIZON_MAX} months.",
 }
 BASE_RULES = [
@@ -48,6 +51,7 @@ BASE_RULES = [
     ("working_days_per_month", lambda v: 1 <= v <= 31),
     ("contingency_percentage", lambda v: 0 <= v < 100),
     ("growth_rate_percentage", lambda v: Decimal("-100") < v <= Decimal("1000")),
+    ("aht_change_percentage", lambda v: Decimal("-100") < v <= Decimal("1000")),
     ("forecast_horizon_months", lambda v: 1 <= v <= HORIZON_MAX),
 ]
 MC_RULES = [
@@ -68,21 +72,35 @@ def validate_forecast_numbers(cleaned, add_error, run_monte_carlo=True):
 
 
 def validate_growth_factor(cleaned, add_error, errors):
-    """Block growth settings that compound to an unrealistic volume within the horizon."""
-    rate, period, horizon = (cleaned.get("growth_rate_percentage"), cleaned.get("growth_period"),
-                             cleaned.get("forecast_horizon_months"))
-    if rate in (None, Decimal("0")) or not period or not horizon:
+    """Block volume growth / AHT change settings that compound to an unrealistic workload within the horizon."""
+    horizon = cleaned.get("forecast_horizon_months")
+    vol_rate = cleaned.get("growth_rate_percentage") or Decimal("0")
+    aht_rate = cleaned.get("aht_change_percentage") or Decimal("0")
+    if not horizon or (vol_rate == 0 and aht_rate == 0):
         return
-    if any(k in errors for k in ("growth_rate_percentage", "growth_period", "forecast_horizon_months",
-                                 "working_days_per_week", "working_days_per_month")):
+    if any(k in errors for k in GROWTH_FIELDS + ("working_days_per_week", "working_days_per_month")):
         return
-    factor = growth_factor(rate, period, horizon, cleaned.get("working_days_per_week") or 5,
-                           cleaned.get("working_days_per_month") or 22)
-    if factor > max_growth_factor():
+    wk, mo = cleaned.get("working_days_per_week") or 5, cleaned.get("working_days_per_month") or 22
+    vol_period = cleaned.get("growth_period") or "MONTHLY"
+    aht_period = cleaned.get("aht_change_period") or "MONTHLY"
+    vf = growth_factor(vol_rate, vol_period, horizon, wk, mo)
+    af = growth_factor(aht_rate, aht_period, horizon, wk, mo)
+    limit = max_growth_factor()
+    if vf * af <= limit:
+        return
+    hint = "Reduce the %, choose a longer period or a shorter horizon."
+    if vf > limit:
         add_error("growth_rate_percentage",
-                  f"{rate}% growth per {PERIOD_LABELS.get(period, period)} over {horizon} months multiplies volume "
-                  f"by more than {max_growth_factor():,.0f}x. Reduce the growth %, choose a longer growth period "
-                  "or a shorter horizon.")
+                  f"{vol_rate}% growth per {PERIOD_LABELS.get(vol_period, vol_period)} over {horizon} months "
+                  f"multiplies volume by more than {limit:,.0f}x. {hint}")
+    elif af > limit:
+        add_error("aht_change_percentage",
+                  f"{aht_rate}% AHT change per {PERIOD_LABELS.get(aht_period, aht_period)} over {horizon} months "
+                  f"multiplies AHT by more than {limit:,.0f}x. {hint}")
+    else:
+        add_error("aht_change_percentage",
+                  f"Volume growth and AHT change together multiply workload by more than {limit:,.0f}x "
+                  f"over {horizon} months. {hint}")
 
 
 def apply_monte_carlo_switch(form, cleaned):
@@ -111,6 +129,10 @@ def apply_growth_defaults(cleaned):
         cleaned["growth_rate_percentage"] = Decimal("0")
     if not cleaned.get("growth_period"):
         cleaned["growth_period"] = "MONTHLY"
+    if cleaned.get("aht_change_percentage") is None:
+        cleaned["aht_change_percentage"] = Decimal("0")
+    if not cleaned.get("aht_change_period"):
+        cleaned["aht_change_period"] = "MONTHLY"
     if cleaned.get("forecast_horizon_months") is None:
         cleaned["forecast_horizon_months"] = HORIZON_DEFAULT
 
@@ -142,12 +164,13 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
                   "working_hours_per_day", "working_days_per_week", "working_days_per_month",
                   "contingency_percentage", "run_monte_carlo", "volume_variation_percentage",
                   "time_variation_percentage", "simulation_count", "simulation_seed",
-                  "growth_rate_percentage", "growth_period", "forecast_horizon_months", "remarks"]
+                  "growth_rate_percentage", "growth_period", "aht_change_percentage", "aht_change_period",
+                  "forecast_horizon_months", "remarks"]
         labels = {
             "function": "Function Name",
             "process": "Process Name",
             "current_fte": "Current FTE",
-            "avg_processing_time": "AHT(Average Handling Time) To Complete One Volume",
+            "avg_processing_time": "Average Time to Complete One Volume",
             "time_unit": "Average Time Unit",
             "working_hours_per_day": "Working Hours Per Day",
             "working_days_per_week": "Working Days Per Week",
@@ -160,6 +183,8 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
             "simulation_seed": "Simulation Seed",
             "growth_rate_percentage": "Volume Growth (%)",
             "growth_period": "Growth Per",
+            "aht_change_percentage": "AHT Change (%)",
+            "aht_change_period": "AHT Change Per",
             "forecast_horizon_months": "Forecast Horizon (Months)",
         }
         help_texts = {
@@ -168,8 +193,11 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
             "contingency_percentage": "Non-productive allowance (breaks, meetings, rework).",
             "run_monte_carlo": "Switch off to get the status from the deterministic calculation only.",
             "simulation_seed": "Optional. The same seed reproduces identical results.",
-            "growth_rate_percentage": "Expected volume increase per period. Negative = decline. 0 = no future projection.",
-            "growth_period": "How often the growth % is applied (compounded).",
+            "growth_rate_percentage": "Expected volume increase per period. Negative = decline. 0 = no volume change.",
+            "growth_period": "How often the volume growth % is applied (compounded).",
+            "aht_change_percentage": "Expected change in time per volume. Positive = slower (e.g. complexity), "
+                                     "negative = faster (e.g. automation, learning). 0 = no AHT change.",
+            "aht_change_period": "How often the AHT change % is applied (compounded).",
             "forecast_horizon_months": f"How far ahead to project (1-{HORIZON_MAX} months).",
         }
         widgets = {
@@ -186,13 +214,14 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
             "simulation_count": forms.NumberInput(attrs={"min": SIM_MIN, "max": SIM_MAX, "step": "1000"}),
             "simulation_seed": forms.NumberInput(attrs={"min": "0"}),
             "growth_rate_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "0.01"}),
+            "aht_change_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "0.01"}),
             "forecast_horizon_months": forms.NumberInput(attrs={"min": "1", "max": HORIZON_MAX}),
             "remarks": forms.Textarea(attrs={"rows": 2}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for name in MC_FIELDS + ("growth_rate_percentage", "growth_period", "forecast_horizon_months"):
+        for name in MC_FIELDS + GROWTH_FIELDS:
             self.fields[name].required = False
         functions = FunctionMaster.objects.filter(is_active=True)
         processes = ProcessMaster.objects.filter(is_active=True)
@@ -286,9 +315,12 @@ class ProcessMasterForm(BootstrapFormMixin, forms.ModelForm):
         return cleaned
 
 
+NO_PROJECTION_Q = Q(growth_rate_percentage=0) & Q(aht_change_percentage=0)
+
+
 class ForecastFilterForm(BootstrapFormMixin, forms.Form):
     OUTLOOK_CHOICES = [("", "All outlooks"), ("short_future", "Short in future"), ("short_now", "Short now"),
-                       ("ok", "Sufficient through horizon"), ("none", "No growth projection")]
+                       ("ok", "Sufficient through horizon"), ("none", "No future projection")]
 
     q = forms.CharField(required=False, label="Search", widget=forms.TextInput(attrs={"placeholder": "Search..."}))
     function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False,
@@ -335,13 +367,13 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
             queryset = queryset.filter(run_monte_carlo=(d["monte_carlo"] == "yes"))
         outlook = d.get("outlook")
         if outlook == "none":
-            queryset = queryset.filter(growth_rate_percentage=0)
+            queryset = queryset.filter(NO_PROJECTION_Q)
         elif outlook == "ok":
-            queryset = queryset.exclude(growth_rate_percentage=0).filter(projected_shortfall_month__isnull=True)
+            queryset = queryset.exclude(NO_PROJECTION_Q).filter(projected_shortfall_month__isnull=True)
         elif outlook == "short_now":
-            queryset = queryset.exclude(growth_rate_percentage=0).filter(projected_shortfall_month=0)
+            queryset = queryset.exclude(NO_PROJECTION_Q).filter(projected_shortfall_month=0)
         elif outlook == "short_future":
-            queryset = queryset.exclude(growth_rate_percentage=0).filter(projected_shortfall_month__gt=0)
+            queryset = queryset.exclude(NO_PROJECTION_Q).filter(projected_shortfall_month__gt=0)
         if d.get("from_date"):
             queryset = queryset.filter(created_at__date__gte=d["from_date"])
         if d.get("to_date"):
@@ -413,7 +445,7 @@ class ScenarioForm(BootstrapFormMixin, forms.Form):
     volume_growth_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6,
                                            decimal_places=2, label="Volume change today %")
     time_change_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6,
-                                         decimal_places=2, label="Processing time change %")
+                                         decimal_places=2, label="AHT change today %")
     contingency_percentage = forms.DecimalField(required=False, min_value=Decimal("0"),
                                                 max_value=Decimal("99.99"), max_digits=5, decimal_places=2,
                                                 label="Contingency %")
@@ -421,8 +453,12 @@ class ScenarioForm(BootstrapFormMixin, forms.Form):
                                      label="Proposed FTE")
     growth_rate_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"),
                                                 max_value=Decimal("1000"), max_digits=7, decimal_places=2,
-                                                label="Ongoing growth % per period",
-                                                help_text="Overrides the base forecast's growth %.")
+                                                label="Ongoing volume growth % per period",
+                                                help_text="Overrides the base forecast's volume growth %.")
+    aht_change_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"),
+                                               max_value=Decimal("1000"), max_digits=7, decimal_places=2,
+                                               label="Ongoing AHT change % per period",
+                                               help_text="Overrides the base forecast's AHT change %.")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -432,7 +468,7 @@ class ScenarioForm(BootstrapFormMixin, forms.Form):
         d = getattr(self, "cleaned_data", None) or {}
         return any(d.get(k) not in (None, "") for k in
                    ("volume_growth_pct", "time_change_pct", "contingency_percentage", "current_fte",
-                    "growth_rate_percentage"))
+                    "growth_rate_percentage", "aht_change_percentage"))
 
 
 ScenarioFormSet = forms.formset_factory(ScenarioForm, extra=0, max_num=CFG.get("SCENARIO_MAX", 4),
@@ -442,7 +478,7 @@ DEFAULT_SCENARIOS = [
     {"name": "10% Volume Growth", "volume_growth_pct": Decimal("10")},
     {"name": "20% Contingency", "contingency_percentage": Decimal("20")},
     {"name": "Proposed FTE", "current_fte": None},
-    {"name": "Processing Time +20%", "time_change_pct": Decimal("20")},
+    {"name": "AHT +20%", "time_change_pct": Decimal("20")},
 ]
 
 
@@ -473,6 +509,7 @@ TIME_UNIT_LOOKUP.update({"sec": "SECONDS", "secs": "SECONDS", "second": "SECONDS
                          "mins": "MINUTES", "minute": "MINUTES", "hr": "HOURS", "hrs": "HOURS", "hour": "HOURS"})
 YES_VALUES = {"yes", "y", "true", "1", "on"}
 NO_VALUES = {"no", "n", "false", "0", "off"}
+PERIOD_ERROR = "Invalid {}. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly."
 
 
 class ForecastRowForm(forms.Form):
@@ -494,6 +531,8 @@ class ForecastRowForm(forms.Form):
     simulation_count = forms.IntegerField(required=False)
     growth_rate_percentage = forms.DecimalField(max_digits=7, decimal_places=2, required=False)
     growth_period = forms.CharField(required=False)
+    aht_change_percentage = forms.DecimalField(max_digits=7, decimal_places=2, required=False)
+    aht_change_period = forms.CharField(required=False)
     forecast_horizon_months = forms.IntegerField(required=False)
     remarks = forms.CharField(required=False)
 
@@ -501,13 +540,14 @@ class ForecastRowForm(forms.Form):
         "working_hours_per_day": Decimal("8"), "working_days_per_week": 5, "working_days_per_month": 22,
         "contingency_percentage": Decimal("15"), "volume_variation_percentage": Decimal("10"),
         "time_variation_percentage": Decimal("15"), "simulation_count": 10000,
-        "growth_rate_percentage": Decimal("0"), "forecast_horizon_months": HORIZON_DEFAULT,
+        "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0"),
+        "forecast_horizon_months": HORIZON_DEFAULT,
     }
 
     def clean_frequency(self):
         value = (self.cleaned_data.get("frequency") or "").strip().lower()
         if value not in FREQUENCY_LOOKUP:
-            raise ValidationError("Invalid frequency. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly.")
+            raise ValidationError(PERIOD_ERROR.format("frequency"))
         return FREQUENCY_LOOKUP[value]
 
     def clean_time_unit(self):
@@ -518,13 +558,19 @@ class ForecastRowForm(forms.Form):
             raise ValidationError("Invalid time unit. Use Seconds, Minutes or Hours.")
         return TIME_UNIT_LOOKUP[value]
 
-    def clean_growth_period(self):
-        value = (self.cleaned_data.get("growth_period") or "").strip().lower()
+    def _clean_period(self, name, label):
+        value = (self.cleaned_data.get(name) or "").strip().lower()
         if not value:
             return "MONTHLY"
         if value not in FREQUENCY_LOOKUP:
-            raise ValidationError("Invalid growth period. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly.")
+            raise ValidationError(PERIOD_ERROR.format(label))
         return FREQUENCY_LOOKUP[value]
+
+    def clean_growth_period(self):
+        return self._clean_period("growth_period", "growth period")
+
+    def clean_aht_change_period(self):
+        return self._clean_period("aht_change_period", "AHT change period")
 
     def clean_run_monte_carlo(self):
         value = (self.cleaned_data.get("run_monte_carlo") or "").strip().lower()

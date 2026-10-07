@@ -1,12 +1,12 @@
 # Manpower Capacity Planning and Monte Carlo Forecasting System
 
 A Django web application that tells you whether each process has **Less**, **Sufficient** or **Higher** manpower
-**today** and **in the future**, and rolls the results up into a **CEO-level Executive Dashboard**.
+**today** and **in the future**, and rolls everything up into a CEO-level **Executive Dashboard**.
 
-* **Monte Carlo** (optional) measures how much risk day-to-day variability adds (P90 FTE, sufficiency probability).
-* **Growth forecast** (optional) projects volume growth and recalculates manpower month by month.
-* **Executive Dashboard** shows the organisation-wide health score, hiring need and budget, risks,
-  redeployment moves and the headcount outlook.
+* **Monte Carlo** (optional): risk from day-to-day variability (P90 FTE, sufficiency probability).
+* **Future forecast** (optional): projects **volume growth** and **AHT (Average Handling Time) change**, then
+  recalculates manpower month by month.
+* **Executive Dashboard**: health score, hiring need and budget, risks, redeployment and headcount outlook.
 
 ---
 
@@ -25,89 +25,99 @@ python manage.py load_sample_data      # optional demo data
 python manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/ and log in. The Executive Dashboard is at http://127.0.0.1:8000/executive/.
-
-**Upgrading:** copy the new files over the old project and run `python manage.py migrate`.
-The executive dashboard adds **no database changes**; it is calculated from existing forecasts.
-
-**Demo users** (`load_sample_data`, password `Demo@12345`): `admin_user`, `analyst_user`, `analyst2_user`,
+Open http://127.0.0.1:8000/. Demo users (password `Demo@12345`): `admin_user`, `analyst_user`, `analyst2_user`,
 `approver_user`, `viewer_user`.
 
-**Tests:** `python manage.py test forecasting` runs 113 tests, including 21 for the executive dashboard.
+**Upgrading:** copy the new files over the old project and run `python manage.py migrate`.
+Migration `0004_manpowerforecast_aht_change` adds the AHT fields. Existing forecasts get **AHT change = 0%**,
+so their results do not change.
+
+**Tests:** `python manage.py test forecasting` runs 122 tests.
 
 ---
 
-## 2. Executive Dashboard
+## 2. Future forecast inputs (form section 4, all optional)
 
-Menu: **Overview -> Executive Dashboard**. It is available to all roles; Viewers see approved forecasts only.
+| Group | Field | Meaning | Default |
+|---|---|---|---|
+| Volume | Volume Growth (%) | Volume change per period. Negative = decline | 0 |
+| Volume | Growth Per | Daily / Weekly / Monthly / Quarterly / Half-Yearly / Yearly | Monthly |
+| Both | Forecast Horizon (Months) | How far ahead to project (1-60) | 12 |
+| **AHT** | **AHT Change (%)** | Change in time per item per period. **Positive = slower** (more complexity, new checks), **negative = faster** (automation, training, learning curve) | 0 |
+| **AHT** | **AHT Change Per** | How often the AHT % is applied (compounded) | Monthly |
 
-### Controls
-| Control | Purpose |
-|---|---|
-| Function | Whole organisation or one function |
-| Outlook | 3 / 6 / 12 / 18 / 24 months |
-| Annual cost per FTE | Fully loaded cost used for all budget figures (default in settings) |
-| Approved only | Use only approved forecasts (recommended for board reporting) |
-| Export Excel / Print-PDF | A board-ready workbook, or a print-optimised page |
+A projection is calculated when **either** volume growth **or** AHT change is not 0.
+The form shows a live preview, e.g. *"After 12 months: volume 1.80x, AHT 10.00 → 7.85 min, workload 1.41x today"*.
 
-### Sections
-| Section | What the CEO learns |
-|---|---|
-| **Capacity Health Score (0-100)** | One number with a red/amber/green rating and three pillars |
-| **The Bottom Line** | Net hires now, net hires by the outlook date, redeployable FTE, capacity above the safe level, all with annual cost |
-| **KPI strip** | Workforce, requirement, utilization vs target, processes short now and short later |
-| **Key Insights** | Plain-English findings generated from the data |
-| **Headcount Outlook** | Safe staffing needed vs current workforce, month by month |
-| **Where Our People Sit** | Current FTE split by Less / Sufficient / Higher status |
-| **Function Scorecard** | Status rating, utilization, hire now, redeployable and hire-by-horizon per function, with drill-down |
-| **Top Risks & Actions** | Short now (red), short in future (orange), high utilization (amber), each with a recommended action |
-| **Risk Matrix** | Utilization vs months until shortage; bubble size = FTE |
-| **Quarterly Hiring Plan** | New and cumulative net hires and annual cost per quarter |
-| **Redeployment Opportunities** | Specific "move N FTE from X to Y" suggestions (same function first) |
+## 3. Forecast logic
 
-### Calculation logic
-| Measure | Formula |
-|---|---|
-| Safe staffing | ceil(P90 FTE) with Monte Carlo, otherwise ceil(required FTE) |
-| Hire now | Sum of (safe staffing - current FTE) for processes below safe staffing |
-| Redeployable | Whole people above safe staffing in Higher Manpower processes |
-| Net hires | max(0, hire now - redeployable) |
-| Hires by outlook | Same, using each process's projected safe staffing at the outlook month |
-| Budget | Net hires x annual cost per FTE |
-| Capacity above safe level | Sum of (current FTE - safe staffing) where positive, x cost per FTE |
-| Organisation utilization | Total required FTE / total current FTE |
-| **Health Score** | 40% Coverage + 30% Efficiency + 30% Resilience |
-| Coverage | % of processes not short today |
-| Efficiency | 100 - 2 x \|utilization - target (80%)\| |
-| Resilience | Average Monte Carlo sufficiency %; if no Monte Carlo data, % of processes neither short nor at high-utilization risk |
-| Rating | 75+ Healthy, 50-74 Needs attention, below 50 At risk |
+Each driver compounds on its **own** period:
 
-### Settings (`settings.FORECASTING`)
-```python
-"EXEC_COST_PER_FTE": 600000,      # default annual cost per FTE
-"EXEC_CURRENCY": "₹",             # ₹ shows Lakh / Crore; other symbols show K / M
-"EXEC_HORIZON_MONTHS": 12,        # default outlook
-"EXEC_TARGET_UTILIZATION": 80,    # organisation target
+```
+Volume(m)   = Volume x (1 + Volume growth% / 100) ^ periods_elapsed(volume period, m)
+AHT(m)      = AHT    x (1 + AHT change%    / 100) ^ periods_elapsed(AHT period, m)
+Workload(m) = Volume(m) x AHT(m)            (workload factor = volume factor x AHT factor)
 ```
 
+| Period | periods_elapsed(m) |
+|---|---|
+| Daily | m x working days per month |
+| Weekly | floor(m x days per month / days per week) |
+| Monthly | m |
+| Quarterly | floor(m / 3) |
+| Half-Yearly | floor(m / 6) |
+| Yearly | floor(m / 12) |
+
+For every month 0..horizon the full calculation (deterministic + optional Monte Carlo + status rules) is rerun
+with the projected volume and AHT. **Current FTE stays fixed.**
+
+**Example:** 2,200 invoices a month, 10 minutes each, 3 FTE, Monte Carlo off, 12-month horizon.
+
+| Scenario | AHT at month 12 | Required FTE at month 12 | Shortfall from | FTE needed |
+|---|---|---|---|---|
+| Volume +5%/month only | 10.00 min | 4.40 | Month 5 | 5 |
+| Volume +5%/month, **AHT -2%/month** | 7.85 min | 3.45 | **Month 8** | 4 |
+| **AHT +10%/quarter** only | 14.64 min | 3.59 | Month 9 | 4 |
+
+The 2% monthly AHT reduction delays the shortage by 3 months and saves 1 FTE.
+
+Settings that multiply volume, AHT or the combined workload by more than 1,000x within the horizon are rejected
+(`GROWTH_MAX_FACTOR`).
+
+### Where AHT appears
+| Screen | AHT output |
+|---|---|
+| Result / Detail | Projection drivers line, an "AHT at horizon" card, and AHT (min) and workload-factor columns in the month-by-month table |
+| Scenario Comparison | An "Ongoing AHT change %" override per scenario and an AHT-at-horizon row |
+| Excel upload | `AHT Change Percentage` and `AHT Change Period` columns (older templates still work) |
+| Excel report | AHT inputs, AHT at horizon, and AHT per month on the Growth Projection sheet |
+| Executive Dashboard | Uses the projection automatically for hires by the outlook date, risks and hiring plan |
+
 ---
 
-## 3. Forecast logic (unchanged)
+## 4. Today's status rules
 
-| Step | Formula |
-|------|---------|
-| Productive minutes / FTE / day | Hours x 60 x (1 - Contingency% / 100) |
-| Daily volume | Volume / working days in the period |
-| Required FTE | Daily volume x minutes per item / productive minutes |
-| Utilization | Required FTE / Current FTE x 100 |
-| Growth | Volume(m) = Volume x (1 + Growth%) ^ periods elapsed |
+1. Current FTE = 0 -> Less Manpower
+2. Current FTE < Required FTE -> Less Manpower
+3. Monte Carlo sufficiency < 80% -> Less Manpower (only when Monte Carlo is on)
+4. Utilization < 70% -> Higher Manpower
+5. Otherwise -> Sufficient Manpower (+ High Utilization Risk above 90%)
 
-**Status rules:** 1) Current FTE = 0 -> Less, 2) Current < Required -> Less, 3) Monte Carlo sufficiency < 80% -> Less (only when Monte Carlo is on),
-4) Utilization < 70% -> Higher, 5) otherwise Sufficient (+ High Utilization Risk above 90%).
+The same rules are applied to every projected month.
 
-## 4. Maker-checker
-Every new, edited, recalculated or uploaded forecast is Pending until it is approved. Approvers can never approve their own forecast, and rejection requires a comment.
+## 5. Executive Dashboard
 
-## 5. PostgreSQL / production
+Menu: **Overview -> Executive Dashboard**. It shows the Health Score (40% Coverage + 30% Efficiency + 30% Resilience),
+net hires now and at the outlook date with annual cost, redeployable FTE, function scorecard, top risks, risk matrix,
+quarterly hiring plan and redeployment moves. It can be exported to Excel or printed to PDF.
+Settings: `EXEC_COST_PER_FTE`, `EXEC_CURRENCY`, `EXEC_HORIZON_MONTHS`, `EXEC_TARGET_UTILIZATION`.
+
+## 6. Maker-checker
+
+Every new, edited, recalculated or uploaded forecast is Pending until it is approved. Approvers can never approve
+their own forecast, and rejection requires a comment.
+
+## 7. PostgreSQL / production
+
 Set `DB_ENGINE=postgresql` and the `DB_*` variables, then `pip install "psycopg[binary]"` and `python manage.py migrate`.
 For production, set `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=False` and `DJANGO_ALLOWED_HOSTS`, then run `python manage.py collectstatic`.

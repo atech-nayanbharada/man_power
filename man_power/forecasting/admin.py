@@ -53,8 +53,10 @@ class SimulationInline(admin.TabularInline):
 class ManpowerForecastAdmin(admin.ModelAdmin):
     list_display = ("id", "function", "process", "frequency", "current_fte", "required_fte",
                     "utilization_percentage", "run_monte_carlo", "growth_rate_percentage", "growth_period",
-                    "projected_shortfall_month", "status", "approval_status", "created_by", "created_at")
-    list_filter = ("status", "approval_status", "run_monte_carlo", "growth_period", "frequency", "function")
+                    "aht_change_percentage", "aht_change_period", "projected_shortfall_month", "status",
+                    "approval_status", "created_by", "created_at")
+    list_filter = ("status", "approval_status", "run_monte_carlo", "growth_period", "aht_change_period",
+                   "frequency", "function")
     search_fields = ("process__process_name", "function__function_name", "remarks")
     date_hierarchy = "created_at"
     inlines = [SimulationInline]

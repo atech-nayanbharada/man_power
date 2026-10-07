@@ -17,10 +17,11 @@ def apply_adjustments(base: ForecastInput, adj: dict) -> ForecastInput:
     """
     adj keys (all optional):
       volume_growth_pct      -> volume x (1 + x/100)       (one-off change to today's volume)
-      time_change_pct        -> avg time x (1 + x/100)
+      time_change_pct        -> avg time x (1 + x/100)     (one-off change to today's AHT)
       contingency_percentage -> override
       current_fte            -> override (proposed FTE)
-      growth_rate_percentage -> override the ongoing growth % per period
+      growth_rate_percentage -> override the ongoing volume growth % per period
+      aht_change_percentage  -> override the ongoing AHT change % per period
     """
     changes = {}
     if _filled(adj.get("volume_growth_pct")):
@@ -33,6 +34,8 @@ def apply_adjustments(base: ForecastInput, adj: dict) -> ForecastInput:
         changes["current_fte"] = Decimal(str(adj["current_fte"]))
     if _filled(adj.get("growth_rate_percentage")):
         changes["growth_rate_percentage"] = Decimal(str(adj["growth_rate_percentage"]))
+    if _filled(adj.get("aht_change_percentage")):
+        changes["aht_change_percentage"] = Decimal(str(adj["aht_change_percentage"]))
     return replace(base, **changes)
 
 
@@ -58,6 +61,7 @@ def compare_scenarios(base: ForecastInput, scenarios: list, start_date=None) -> 
             "avg_processing_time": q(inp.avg_processing_time),
             "contingency_percentage": q(inp.contingency_percentage),
             "growth_rate_percentage": q(inp.growth_rate_percentage),
+            "aht_change_percentage": q(inp.aht_change_percentage),
             "required_fte": det.required_fte,
             "operational_fte": det.recommended_operational_fte,
             "monte_carlo": mc is not None,
@@ -72,6 +76,7 @@ def compare_scenarios(base: ForecastInput, scenarios: list, start_date=None) -> 
             "fte_gap": det.fte_gap,
             "has_projection": proj is not None,
             "horizon_label": proj.points[-1]["label"] if proj else "",
+            "horizon_aht": proj.points[-1]["aht_minutes"] if proj else None,
             "horizon_required_fte": proj.horizon_required_fte if proj else None,
             "horizon_fte_needed": proj.horizon_fte_needed if proj else None,
             "horizon_status_label": STATUS_LABELS[proj.horizon_status] if proj else "",

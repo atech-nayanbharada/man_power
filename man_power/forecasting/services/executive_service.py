@@ -8,6 +8,7 @@ answers:
   * What does it cost?                             -> hiring budget and idle-capacity cost
   * Where are the risks and what should we do?     -> top risks, redeployment moves, insights
   * How does the requirement evolve?               -> headcount trajectory and quarterly hiring plan
+    (projections include both volume growth and AHT change)
 
 Capacity Health Score = 40% Coverage + 30% Efficiency + 30% Resilience
   Coverage    = % of processes that are not short of manpower today
@@ -238,9 +239,10 @@ def top_risks(views, start_date, limit=7):
                           "forecast_id": v.forecast.pk})
         elif v.short_future:
             when = month_label(start_date, v.shortfall_month)
+            drivers = v.forecast.growth_drivers_text or "projected workload growth"
             risks.append({"severity": "orange", "rank": (1, v.shortfall_month), "process": v.process,
                           "function": v.function, "when": when,
-                          "issue": f"Sufficient today, short from {when} because of volume growth",
+                          "issue": f"Sufficient today, short from {when} ({drivers})",
                           "action": f"Plan {fmt(v.hire_at_horizon)} FTE before {when}",
                           "forecast_id": v.forecast.pk})
         elif v.high_risk:
@@ -277,10 +279,14 @@ def build_insights(k, scorecard, moves, plan, cfg, horizon_label):
         first = min((r for r in plan if r["new_hires"] > 0 and r["month"] > 0), key=lambda r: r["month"],
                     default=None)
         text = (f"{k['short_future_count']} process(es) are fine today but will need more people by {horizon_label} "
-                f"because of volume growth.")
+                f"because of projected volume and AHT changes.")
         if first:
             text += f" The first new hiring wave is due by {first['label']} ({first['new_hires']} FTE)."
         insights.append({"tone": "orange", "icon": "bi-graph-up-arrow", "text": text})
+    if k["aht_change_count"]:
+        insights.append({"tone": "primary", "icon": "bi-stopwatch",
+                         "text": f"{k['aht_change_count']} process(es) include a projected AHT change "
+                                 "(for example automation savings or added complexity) in their forecast."})
     if k["net_hire_horizon"]:
         insights.append({"tone": "primary", "icon": "bi-cash-coin",
                          "text": f"Net hiring need by {horizon_label}: {k['net_hire_horizon']} FTE "
@@ -362,6 +368,7 @@ def build_executive(queryset, start_date: date, cost_per_fte=None, horizon=None)
         "higher_count": sum(1 for v in views if v.status == "HIGHER"),
         "sufficient_count": sum(1 for v in views if v.status == "SUFFICIENT"),
         "projection_count": sum(1 for f in forecasts if f.has_projection),
+        "aht_change_count": sum(1 for f in forecasts if f.has_aht_change),
         "mc_count": sum(1 for v in views if v.sufficiency is not None),
         "pending_count": sum(1 for f in forecasts if f.approval_status != "APPROVED"),
     }
@@ -403,7 +410,6 @@ def build_executive(queryset, start_date: date, cost_per_fte=None, horizon=None)
     risks = top_risks(views, start_date)
     insights = build_insights(kpis, scorecard, moves, plan, cfg, horizon_label)
 
-    # Charts
     labels = [month_label(start_date, m) for m in range(horizon + 1)]
     fte_by_status = defaultdict(lambda: ZERO)
     for v in views:

@@ -38,6 +38,15 @@ class ApprovalStatus(models.TextChoices):
 
 
 STATUS_CSS = {"LESS": "danger", "SUFFICIENT": "success", "HIGHER": "amber"}
+PERIOD_WORDS = {"DAILY": "day", "WEEKLY": "week", "MONTHLY": "month", "QUARTERLY": "quarter",
+                "HALF_YEARLY": "half-year", "YEARLY": "year"}
+
+
+def pct_text(value) -> str:
+    """Signed percentage without trailing zeros: +5, -2.5."""
+    d = Decimal(str(value)).normalize()
+    text = f"{d:f}"
+    return f"+{text}" if d > 0 else text
 
 
 def default_run_monte_carlo():
@@ -154,6 +163,12 @@ class ManpowerForecast(TimeStampedModel):
     forecast_horizon_months = models.PositiveSmallIntegerField(
         default=default_horizon_months, validators=[MinValueValidator(1), MaxValueValidator(60)]
     )
+    aht_change_percentage = models.DecimalField(
+        "AHT change %", max_digits=7, decimal_places=2, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("-99.99")), MaxValueValidator(Decimal("1000"))],
+        help_text="Expected change in average handling time per AHT period (negative = faster, 0 = no change).",
+    )
+    aht_change_period = models.CharField(max_length=20, choices=Frequency.choices, default=Frequency.MONTHLY)
     remarks = models.TextField(blank=True)
 
     # ---------- Deterministic outputs ----------
@@ -239,6 +254,30 @@ class ManpowerForecast(TimeStampedModel):
 
     # ---------- Growth projection helpers ----------
     @property
+    def has_volume_growth(self):
+        return bool(getattr(self, "growth_rate_percentage", 0))
+
+    @property
+    def has_aht_change(self):
+        return bool(getattr(self, "aht_change_percentage", 0))
+
+    @property
+    def growth_drivers(self):
+        """Human-readable list of the projection drivers, e.g. ['+5% volume per month', '-2% AHT per quarter']."""
+        drivers = []
+        if self.has_volume_growth:
+            drivers.append(f"{pct_text(self.growth_rate_percentage)}% volume per "
+                           f"{PERIOD_WORDS.get(self.growth_period, self.growth_period)}")
+        if self.has_aht_change:
+            drivers.append(f"{pct_text(self.aht_change_percentage)}% AHT per "
+                           f"{PERIOD_WORDS.get(self.aht_change_period, self.aht_change_period)}")
+        return drivers
+
+    @property
+    def growth_drivers_text(self):
+        return " and ".join(self.growth_drivers)
+
+    @property
     def projection_points(self):
         data = getattr(self, "projection_data", None) or {}
         return data.get("points", []) if isinstance(data, dict) else []
@@ -256,6 +295,11 @@ class ManpowerForecast(TimeStampedModel):
     def projection_end_label(self):
         points = self.projection_points
         return points[-1]["label"] if points else ""
+
+    @property
+    def projection_end_aht(self):
+        points = self.projection_points
+        return points[-1].get("aht_minutes") if points else None
 
     @property
     def shortfall_label(self):

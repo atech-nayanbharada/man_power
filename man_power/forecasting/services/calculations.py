@@ -104,13 +104,15 @@ class ForecastInput:
     growth_rate_percentage: Decimal = Decimal("0")
     growth_period: str = "MONTHLY"
     forecast_horizon_months: int = 12
+    aht_change_percentage: Decimal = Decimal("0")
+    aht_change_period: str = "MONTHLY"
 
     def __post_init__(self):
         defaults = {"volume_variation_percentage": Decimal("10"), "time_variation_percentage": Decimal("15"),
-                    "growth_rate_percentage": Decimal("0")}
+                    "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0")}
         for name in ("volume", "current_fte", "avg_processing_time", "working_hours_per_day",
                      "contingency_percentage", "volume_variation_percentage", "time_variation_percentage",
-                     "growth_rate_percentage"):
+                     "growth_rate_percentage", "aht_change_percentage"):
             value = getattr(self, name)
             if value in (None, "") and name in defaults:
                 value = defaults[name]
@@ -121,12 +123,22 @@ class ForecastInput:
         self.simulation_count = int(self.simulation_count) if self.simulation_count not in (None, "") else 10000
         self.simulation_seed = int(self.simulation_seed) if self.simulation_seed not in (None, "") else None
         self.growth_period = self.growth_period or "MONTHLY"
+        self.aht_change_period = self.aht_change_period or "MONTHLY"
         self.forecast_horizon_months = (int(self.forecast_horizon_months)
                                         if self.forecast_horizon_months not in (None, "") else 12)
 
     @property
-    def has_growth(self) -> bool:
+    def has_volume_growth(self) -> bool:
         return self.growth_rate_percentage != 0
+
+    @property
+    def has_aht_change(self) -> bool:
+        return self.aht_change_percentage != 0
+
+    @property
+    def has_growth(self) -> bool:
+        """True when a future projection is needed (volume growth and/or AHT change)."""
+        return self.has_volume_growth or self.has_aht_change
 
 
 @dataclass

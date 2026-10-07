@@ -9,7 +9,7 @@
       <div class="h4 mb-1">{{ f.get_status_display }}</div>
       <div>{{ f.recommendation }}</div>
       {% if f.has_projection %}<div class="mt-2 small fw-semibold"><i class="bi bi-graph-up-arrow"></i>
-        {% if f.outlook == "ok" %}Future: stays sufficient up to {{ f.projection_end_label }}.{% elif f.outlook == "short_future" %}Future: more manpower needed from {{ f.shortfall_label }}.{% else %}Future: see the growth projection below.{% endif %}
+        {% if f.outlook == "ok" %}Future: stays sufficient up to {{ f.projection_end_label }}.{% elif f.outlook == "short_future" %}Future: more manpower needed from {{ f.shortfall_label }}.{% else %}Future: see the projection below.{% endif %}
         <a href="#growth-projection" class="link-light">View forecast</a></div>{% endif %}
     </div>
     <div class="text-end d-flex flex-column gap-1 align-items-end">
@@ -53,7 +53,7 @@
   {% include "partials/_projection.html" %}
 {% else %}
 <div class="alert alert-light border d-flex gap-2 mb-4"><i class="bi bi-graph-up"></i>
-  <div>No growth % was entered, so no future projection was calculated. {% if can_edit %}<a href="{% url 'forecasting:forecast_update' f.pk %}">Edit the forecast</a> and set <em>Volume Growth (%)</em> to see when manpower becomes insufficient.{% endif %}</div>
+  <div>No volume growth or AHT change was entered, so no future projection was calculated. {% if can_edit %}<a href="{% url 'forecasting:forecast_update' f.pk %}">Edit the forecast</a> and set <em>Volume Growth (%)</em> and/or <em>AHT Change (%)</em> to see when manpower becomes insufficient.{% endif %}</div>
 </div>
 {% endif %}
 
@@ -67,7 +67,7 @@
           <tr><th>Process Name</th><td>{{ f.process.process_name }}</td></tr>
           <tr><th>Frequency</th><td>{{ f.get_frequency_display }}</td></tr>
           <tr><th>Original Volume</th><td>{{ f.volume|num }}</td></tr>
-          <tr><th>Average Time per Volume</th><td>{{ f.avg_processing_time|num }} {{ f.get_time_unit_display }}</td></tr>
+          <tr><th>Average Time per Volume (AHT)</th><td>{{ f.avg_processing_time|num }} {{ f.get_time_unit_display }}</td></tr>
           <tr><th>Working Hours / Day</th><td>{{ f.working_hours_per_day|num }}</td></tr>
           <tr><th>Working Days / Week, Month</th><td>{{ f.working_days_per_week }} / {{ f.working_days_per_month }}</td></tr>
           <tr><th>Contingency</th><td>{{ f.contingency_percentage|pct }}</td></tr>
@@ -76,7 +76,9 @@
           <tr><th>Volume / Time Variation</th><td>{{ f.volume_variation_percentage|pct }} / {{ f.time_variation_percentage|pct }}</td></tr>
           <tr><th>Simulations / Seed</th><td>{{ f.simulation_count|num:0 }} / {{ f.simulation_seed|default:"Random" }}</td></tr>
           {% endif %}
-          <tr><th>Volume Growth</th><td>{% if f.has_projection %}{{ f.growth_rate_percentage|signed }}% per {{ f.get_growth_period_display|lower }}, {{ f.forecast_horizon_months }} months{% else %}None{% endif %}</td></tr>
+          <tr><th>Volume Growth</th><td>{% if f.has_volume_growth %}{{ f.growth_rate_percentage|signed }}% per {{ f.get_growth_period_display|lower }}{% else %}None{% endif %}</td></tr>
+          <tr><th>AHT Change</th><td>{% if f.has_aht_change %}{{ f.aht_change_percentage|signed }}% per {{ f.get_aht_change_period_display|lower }}{% else %}None{% endif %}</td></tr>
+          {% if f.has_projection %}<tr><th>Forecast Horizon</th><td>{{ f.forecast_horizon_months }} months</td></tr>{% endif %}
         </table>
       </div>
     </div>

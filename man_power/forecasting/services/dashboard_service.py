@@ -1,7 +1,7 @@
 """
 Dashboard KPIs and chart datasets. Uses the latest forecast per process to avoid double counting.
 Forecasts without Monte Carlo contribute their operational FTE to the risk-adjusted total and appear
-as gaps (null) in Monte Carlo-only charts. Forecasts without growth use today's requirement as the
+as gaps (null) in Monte Carlo-only charts. Forecasts without a projection use today's requirement as the
 horizon requirement.
 """
 from collections import OrderedDict, defaultdict

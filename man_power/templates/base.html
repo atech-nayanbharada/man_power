@@ -26,14 +26,14 @@
       {% if perm_create %}
       <li><a class="nav-link {% if url_name == 'forecast_create' %}active{% endif %}" href="{% url 'forecasting:forecast_create' %}"><i class="bi bi-plus-circle"></i> Add Forecast</a></li>
       {% endif %}
-<!--      <li><a class="nav-link {% if url_name == 'forecast_list' %}active{% endif %}" href="{% url 'forecasting:forecast_list' %}"><i class="bi bi-clock-history"></i> Forecast History</a></li>-->
+      <li><a class="nav-link {% if url_name == 'forecast_list' %}active{% endif %}" href="{% url 'forecasting:forecast_list' %}"><i class="bi bi-clock-history"></i> Forecast History</a></li>
       {% if perm_scenario %}
       <li><a class="nav-link {% if url_name == 'scenario' %}active{% endif %}" href="{% url 'forecasting:scenario' %}"><i class="bi bi-layout-split"></i> Scenario Comparison</a></li>
       {% endif %}
       {% if perm_upload %}
-<!--      <li><a class="nav-link {% if url_name == 'bulk_upload' %}active{% endif %}" href="{% url 'forecasting:bulk_upload' %}"><i class="bi bi-file-earmark-arrow-up"></i> Bulk Excel Upload</a></li>-->
+      <li><a class="nav-link {% if url_name == 'bulk_upload' %}active{% endif %}" href="{% url 'forecasting:bulk_upload' %}"><i class="bi bi-file-earmark-arrow-up"></i> Bulk Excel Upload</a></li>
       {% endif %}
-<!--      <li><a class="nav-link {% if url_name == 'reports' %}active{% endif %}" href="{% url 'forecasting:reports' %}"><i class="bi bi-file-earmark-spreadsheet"></i> Reports</a></li>-->
+      <li><a class="nav-link {% if url_name == 'reports' %}active{% endif %}" href="{% url 'forecasting:reports' %}"><i class="bi bi-file-earmark-spreadsheet"></i> Reports</a></li>
       {% if perm_manage_masters %}
       <li class="nav-section">Masters</li>
       <li><a class="nav-link {% if 'function' in url_name %}active{% endif %}" href="{% url 'forecasting:function_list' %}"><i class="bi bi-diagram-3"></i> Function Master</a></li>

@@ -34,6 +34,8 @@ UPLOAD_COLUMNS = [
     ("Simulation Count", "simulation_count"),
     ("Growth Percentage", "growth_rate_percentage"),
     ("Growth Period", "growth_period"),
+    ("AHT Change Percentage", "aht_change_percentage"),
+    ("AHT Change Period", "aht_change_period"),
     ("Forecast Horizon Months", "forecast_horizon_months"),
     ("Remarks", "remarks"),
 ]
@@ -54,7 +56,7 @@ GROUP_FILLS = {"Input Values": "2E75B6", "Deterministic Results": "548235",
 STATUS_FILLS = {"Less Manpower": "F8D7DA", "Sufficient Manpower": "D1E7DD", "Higher Manpower": "FFE8B3"}
 RAG_FILLS = {"danger": "F8D7DA", "amber": "FFE8B3", "success": "D1E7DD", "info": "CFE2FF"}
 NOT_RUN = "Not run"
-NO_GROWTH = "No growth"
+NO_GROWTH = "No projection"
 NOT_RUN_FONT = Font(italic=True, color="808080")
 
 
@@ -118,11 +120,11 @@ def generate_upload_template():
     if pairs:
         samples = [[p.function.function_name, p.process_name, p.get_default_frequency_display(), 2200, 3, 10,
                     "Minutes", 8, 5, 22, 15, "Yes" if i == 0 else "No", 10, 15, 10000,
-                    5 if i == 0 else 0, "Monthly", 12, "Sample row - replace with actual data"]
-                   for i, p in enumerate(pairs)]
+                    5 if i == 0 else 0, "Monthly", -2 if i == 0 else 0, "Quarterly", 12,
+                    "Sample row - replace with actual data"] for i, p in enumerate(pairs)]
     else:
         samples = [["Finance", "Invoice Processing", "Monthly", 2200, 3, 10, "Minutes", 8, 5, 22, 15, "Yes", 10, 15,
-                    10000, 5, "Monthly", 12, "Sample row - replace with actual data"]]
+                    10000, 5, "Monthly", -2, "Quarterly", 12, "Sample row - replace with actual data"]]
     for row in samples:
         ws.append(row)
 
@@ -136,6 +138,9 @@ def generate_upload_template():
         (DataValidation(type="list", formula1=FREQ_LIST, allow_blank=True, showErrorMessage=True,
                         errorTitle="Invalid growth period", error="Select a growth period from the list."),
          "Growth Period"),
+        (DataValidation(type="list", formula1=FREQ_LIST, allow_blank=True, showErrorMessage=True,
+                        errorTitle="Invalid AHT change period", error="Select a period from the list."),
+         "AHT Change Period"),
     ]
     for dv, header in validations:
         ws.add_data_validation(dv)
@@ -156,7 +161,7 @@ def generate_upload_template():
         ("Frequency", "Yes", "Daily, Weekly, Monthly, Quarterly, Half-Yearly, Yearly"),
         ("Volume", "Yes", "Greater than 0"),
         ("Current FTE", "Yes", "0 or more"),
-        ("Average Processing Time", "Yes", "Greater than 0"),
+        ("Average Processing Time", "Yes", "Greater than 0 (this is today's AHT)"),
         ("Time Unit", "No", "Seconds / Minutes / Hours (default Minutes)"),
         ("Working Hours Per Day", "No", "Greater than 0 and up to 24 (default 8)"),
         ("Working Days Per Week", "No", "1-7 (default 5)"),
@@ -166,9 +171,12 @@ def generate_upload_template():
         ("Volume Variation Percentage", "No", "0 or more (default 10). Used only when Run Monte Carlo = Yes"),
         ("Processing Time Variation Percentage", "No", "0 or more (default 15). Used only when Run Monte Carlo = Yes"),
         ("Simulation Count", "No", "1,000 - 100,000 (default 10,000). Used only when Run Monte Carlo = Yes"),
-        ("Growth Percentage", "No", "Volume change per growth period, e.g. 5 = +5%, -2 = -2% (default 0 = no projection)"),
+        ("Growth Percentage", "No", "Volume change per growth period, e.g. 5 = +5%, -2 = -2% (default 0)"),
         ("Growth Period", "No", "Daily, Weekly, Monthly, Quarterly, Half-Yearly, Yearly (default Monthly)"),
-        ("Forecast Horizon Months", "No", "1-60 months (default 12)"),
+        ("AHT Change Percentage", "No", "AHT change per AHT period, e.g. 3 = 3% slower, -5 = 5% faster (default 0)"),
+        ("AHT Change Period", "No", "Daily, Weekly, Monthly, Quarterly, Half-Yearly, Yearly (default Monthly)"),
+        ("Forecast Horizon Months", "No", "1-60 months (default 12). A projection is created when volume growth "
+                                          "or AHT change is not 0"),
         ("Remarks", "No", "Free text"),
     ]
     for r in rules:
@@ -176,7 +184,7 @@ def generate_upload_template():
     for row in ins.iter_rows(min_row=4, max_row=ins.max_row, max_col=3):
         for cell in row:
             cell.border = BORDER
-    autosize(ins, min_width=12, max_width=80)
+    autosize(ins, min_width=12, max_width=90)
 
     ms = wb.create_sheet("Valid Masters")
     ms.append(["Function Name", "Process Name", "Default Frequency"])
@@ -262,6 +270,8 @@ def process_upload(uploaded_file, user) -> UploadResult:
                 simulation_count=cd["simulation_count"],
                 growth_rate_percentage=cd["growth_rate_percentage"],
                 growth_period=cd["growth_period"],
+                aht_change_percentage=cd["aht_change_percentage"],
+                aht_change_period=cd["aht_change_period"],
                 forecast_horizon_months=cd["forecast_horizon_months"],
                 remarks=cd.get("remarks") or "",
             )
@@ -307,7 +317,7 @@ def _sa(attr):
 
 
 def _g(getter):
-    """Growth projection value, or 'No growth' when no projection exists."""
+    """Projection value, or 'No projection' when no projection exists."""
     return lambda f, s: getter(f) if f.has_projection else NO_GROWTH
 
 
@@ -338,8 +348,10 @@ REPORT_GROUPS = [
         ("Time Variation %", _mc_input("time_variation_percentage")),
         ("Simulation Count", lambda f, s: f.simulation_count if f.run_monte_carlo else NOT_RUN),
         ("Seed", lambda f, s: f.simulation_seed if f.run_monte_carlo else None),
-        ("Growth %", _a("growth_rate_percentage")),
+        ("Volume Growth %", _a("growth_rate_percentage")),
         ("Growth Period", lambda f, s: f.get_growth_period_display()),
+        ("AHT Change %", _a("aht_change_percentage")),
+        ("AHT Change Period", lambda f, s: f.get_aht_change_period_display()),
         ("Horizon (Months)", lambda f, s: f.forecast_horizon_months),
     ]),
     ("Deterministic Results", [
@@ -370,9 +382,11 @@ REPORT_GROUPS = [
         ("Failure %", _sa("failure_probability")),
     ]),
     ("Growth Projection", [
+        ("Projection Drivers", _g(lambda f: f.growth_drivers_text)),
         ("Sufficient Until", _g(lambda f: f.sufficient_until_label or "-")),
         ("Shortfall From", _g(_shortfall_text)),
         ("Horizon End", _g(lambda f: f.projection_end_label)),
+        ("AHT at Horizon (min)", _g(lambda f: f.projection_end_aht)),
         ("Required FTE at Horizon", _g(lambda f: _num(f.projected_horizon_required_fte))),
         ("FTE Needed at Horizon", _g(lambda f: _num(f.projected_horizon_fte_needed))),
         ("Additional FTE at Horizon", _g(lambda f: _num(f.horizon_additional_fte))),
@@ -392,12 +406,12 @@ REPORT_GROUPS = [
     ]),
 ]
 PCT_LABELS = {"Contingency %", "Volume Variation %", "Time Variation %", "Utilization %", "Unused Capacity %",
-              "Sufficiency %", "Failure %", "Growth %"}
+              "Sufficiency %", "Failure %", "Volume Growth %", "AHT Change %"}
 TEXT_LABELS = {"Function", "Process", "Frequency", "Time Unit", "Status", "Status Basis", "High Utilization Risk",
                "Recommendation", "Approval Status", "Approved By", "Created By", "Created At", "Remarks",
                "Forecast ID", "Seed", "Simulation Count", "Working Days/Week", "Working Days/Month", "Monte Carlo",
-               "Growth Period", "Horizon (Months)", "Sufficient Until", "Shortfall From", "Horizon End",
-               "Status at Horizon", "Projection Summary"}
+               "Growth Period", "AHT Change Period", "Horizon (Months)", "Projection Drivers", "Sufficient Until",
+               "Shortfall From", "Horizon End", "Status at Horizon", "Projection Summary"}
 WRAP_LABELS = {"Recommendation", "Projection Summary"}
 STATUS_LABEL_COLUMNS = ("Status", "Status at Horizon")
 
@@ -455,7 +469,8 @@ def _write_summary_sheet(wb, forecasts):
         ("Total Current FTE", round(sum(float(f.current_fte) for f in forecasts), 2)),
         ("Total Required FTE (today)", round(sum(float(f.required_fte) for f in forecasts), 2)),
         ("Total Risk-Adjusted FTE*", sum(float(f.risk_adjusted_fte) for f in forecasts)),
-        ("Forecasts with growth projection", len(projected)),
+        ("Forecasts with a future projection", len(projected)),
+        ("  ...of which include an AHT change", sum(1 for f in projected if f.has_aht_change)),
         ("Sufficient today but short in future", sum(1 for f in projected
                                                      if f.status != "LESS" and f.projected_shortfall_month)),
         ("Additional FTE needed at horizon", round(sum(float(f.horizon_additional_fte or 0) for f in projected), 2)),
@@ -478,28 +493,34 @@ def _write_summary_sheet(wb, forecasts):
 def _write_projection_sheet(wb, forecasts, title="Growth Projection"):
     """Long-format month-by-month projection for every forecast that has one."""
     ws = wb.create_sheet(title)
-    headers = ["Forecast ID", "Function", "Process", "Month", "Period", "Growth Factor", "Volume", "Daily Volume",
-               "Current FTE", "Required FTE", "Operational FTE", "P90 FTE", "FTE Needed", "Additional FTE",
-               "Utilization %", "Sufficiency %", "Status"]
+    headers = ["Forecast ID", "Function", "Process", "Month", "Period", "Volume Factor", "AHT Factor",
+               "Workload Factor", "Volume", "Daily Volume", "AHT (min)", "Current FTE", "Required FTE",
+               "Operational FTE", "P90 FTE", "FTE Needed", "Additional FTE", "Utilization %", "Sufficiency %",
+               "Status"]
     ws.append(headers)
     style_header_row(ws, 1, 1, len(headers))
     for f in forecasts:
         for p in f.projection_points:
             ws.append([f.pk, f.function.function_name, f.process.process_name, p["month"], p["label"],
-                       p["growth_factor"], p["volume"], p["daily_volume"], float(f.current_fte), p["required_fte"],
-                       p["operational_fte"], p["p90_fte"] if p["p90_fte"] is not None else NOT_RUN,
+                       p["growth_factor"], p.get("aht_factor", 1.0), p.get("workload_factor", p["growth_factor"]),
+                       p["volume"], p["daily_volume"], p.get("aht_minutes"), float(f.current_fte),
+                       p["required_fte"], p["operational_fte"],
+                       p["p90_fte"] if p["p90_fte"] is not None else NOT_RUN,
                        p["fte_needed"], p["additional_fte"], p["utilization"],
                        p["sufficiency"] if p["sufficiency"] is not None else NOT_RUN, p["status_label"]])
     status_col = len(headers)
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=len(headers)):
         for cell in row:
             cell.border = BORDER
+            header = headers[cell.column - 1]
             if cell.value == NOT_RUN:
                 cell.font = NOT_RUN_FONT
-            elif headers[cell.column - 1] in ("Utilization %", "Sufficiency %"):
+            elif header in ("Utilization %", "Sufficiency %"):
                 cell.number_format = '0.00"%"'
-            elif headers[cell.column - 1] in ("Volume", "Daily Volume", "Required FTE", "P90 FTE", "Current FTE"):
+            elif header in ("Volume", "Daily Volume", "AHT (min)", "Required FTE", "P90 FTE", "Current FTE"):
                 cell.number_format = "#,##0.00"
+            elif header.endswith("Factor"):
+                cell.number_format = "0.0000"
         status_cell = row[status_col - 1]
         if STATUS_FILLS.get(status_cell.value):
             status_cell.fill = PatternFill("solid", fgColor=STATUS_FILLS[status_cell.value])
@@ -609,6 +630,7 @@ def export_executive(data, filters_text=""):
         ("Organisation utilization %", float(k["org_utilization"]) if k["org_utilization"] is not None else None),
         ("Processes short today", k["short_now_count"]),
         (f"Processes short by {data['horizon_label']}", k["short_future_count"]),
+        ("Processes with a projected AHT change", k["aht_change_count"]),
         ("Hiring need today (gross FTE)", float(k["hire_now"])),
         ("Redeployable FTE", k["redeployable"]),
         ("Net hiring need today (FTE)", k["net_hire_now"]),

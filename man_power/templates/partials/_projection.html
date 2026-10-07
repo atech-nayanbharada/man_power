@@ -3,8 +3,8 @@
   <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
     <span class="fw-semibold"><i class="bi bi-graph-up-arrow text-primary"></i> Future Manpower Forecast</span>
     <span class="small text-muted">
-      {{ f.growth_rate_percentage|signed }}% per {{ f.get_growth_period_display|lower }} &middot;
-      {{ f.forecast_horizon_months }}-month horizon &middot;
+      {% for d in f.growth_drivers %}<span class="badge driver-badge">{{ d }}</span> {% endfor %}
+      &middot; {{ f.forecast_horizon_months }}-month horizon &middot;
       FTE needed basis: {% if f.run_monte_carlo %}risk-adjusted P90{% else %}operational{% endif %}
     </span>
   </div>
@@ -17,16 +17,21 @@
     {% endwith %}
 
     <div class="row g-3 mb-4">
-      <div class="col-6 col-lg-3"><div class="kpi-card kpi-green"><div class="kpi-label">Sufficient Until</div>
+      <div class="col-6 col-lg"><div class="kpi-card kpi-green"><div class="kpi-label">Sufficient Until</div>
         <div class="kpi-value kpi-value-sm">{% if f.sufficient_until_label %}{{ f.sufficient_until_label }}{% else %}<span class="text-danger">Not sufficient now</span>{% endif %}</div>
         {% if f.outlook == "ok" %}<div class="kpi-note">End of horizon</div>{% endif %}</div></div>
-      <div class="col-6 col-lg-3"><div class="kpi-card kpi-red"><div class="kpi-label">More Manpower Needed From</div>
+      <div class="col-6 col-lg"><div class="kpi-card kpi-red"><div class="kpi-label">More Manpower Needed From</div>
         <div class="kpi-value kpi-value-sm">{% if f.outlook == "ok" %}<span class="kpi-muted">Not within horizon</span>{% elif f.outlook == "short_now" %}Now ({{ f.shortfall_label }}){% else %}{{ f.shortfall_label }}{% endif %}</div>
         {% if f.projected_shortfall_month %}<div class="kpi-note">Month {{ f.projected_shortfall_month }}</div>{% endif %}</div></div>
-      <div class="col-6 col-lg-3"><div class="kpi-card kpi-blue"><div class="kpi-label">Required FTE at {{ f.projection_end_label }}</div>
+      {% if f.has_aht_change %}
+      <div class="col-6 col-lg"><div class="kpi-card kpi-teal"><div class="kpi-label">AHT at {{ f.projection_end_label }}</div>
+        <div class="kpi-value">{{ f.projection_end_aht|num }} <small class="kpi-unit">min</small></div>
+        <div class="kpi-note">Today: {{ f.processing_time_minutes|num }} min</div></div></div>
+      {% endif %}
+      <div class="col-6 col-lg"><div class="kpi-card kpi-blue"><div class="kpi-label">Required FTE at {{ f.projection_end_label }}</div>
         <div class="kpi-value">{{ f.projected_horizon_required_fte|num }}</div>
         <div class="kpi-note">Today: {{ f.required_fte|num }}</div></div></div>
-      <div class="col-6 col-lg-3"><div class="kpi-card kpi-purple"><div class="kpi-label">FTE Needed at {{ f.projection_end_label }}</div>
+      <div class="col-6 col-lg"><div class="kpi-card kpi-purple"><div class="kpi-label">FTE Needed at {{ f.projection_end_label }}</div>
         <div class="kpi-value">{{ f.projected_horizon_fte_needed|num:0 }}</div>
         <div class="kpi-note">{% if f.horizon_additional_fte %}+{{ f.horizon_additional_fte|num }} vs today's {{ f.current_fte|num }} FTE{% else %}No additional FTE needed{% endif %}</div></div></div>
     </div>
@@ -52,6 +57,7 @@
       <table class="table table-sm table-hover align-middle mb-0 projection-table">
         <thead class="table-light">
           <tr><th>Month</th><th>Period</th><th class="text-end">Volume ({{ f.get_frequency_display }})</th><th class="text-end">Daily Volume</th>
+            <th class="text-end">AHT (min)</th><th class="text-end">Workload &times;</th>
             <th class="text-end">Required FTE</th><th class="text-end">Operational FTE</th>
             {% if f.run_monte_carlo %}<th class="text-end">P90 FTE</th>{% endif %}
             <th class="text-end">FTE Needed</th><th class="text-end">Additional FTE</th><th class="text-end">Utilization</th>
@@ -65,6 +71,8 @@
             <td>{{ p.label }}</td>
             <td class="text-end">{{ p.volume|num }}</td>
             <td class="text-end">{{ p.daily_volume|num }}</td>
+            <td class="text-end">{{ p.aht_minutes|num }}</td>
+            <td class="text-end">{{ p.workload_factor|num:3 }}</td>
             <td class="text-end">{{ p.required_fte|num }}</td>
             <td class="text-end">{{ p.operational_fte|num:0 }}</td>
             {% if f.run_monte_carlo %}<td class="text-end">{{ p.p90_fte|num }}</td>{% endif %}
@@ -78,6 +86,6 @@
         </tbody>
       </table>
     </div>
-    <div class="form-text mt-2">Current FTE stays fixed at {{ f.current_fte|num }} in every month. "FTE Needed" is {% if f.run_monte_carlo %}P90 rounded up (risk-adjusted){% else %}required FTE rounded up (operational){% endif %}. The highlighted row is the first month with Less Manpower.</div>
+    <div class="form-text mt-2">Current FTE stays fixed at {{ f.current_fte|num }} in every month. Workload &times; = volume factor &times; AHT factor compared with today. "FTE Needed" is {% if f.run_monte_carlo %}P90 rounded up (risk-adjusted){% else %}required FTE rounded up (operational){% endif %}. The highlighted row is the first month with Less Manpower.</div>
   </div>
 </div>

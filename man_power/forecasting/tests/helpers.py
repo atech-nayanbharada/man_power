@@ -30,7 +30,8 @@ def make_forecast(user, function, process, **overrides):
     data = dict(function=function, process=process, frequency="MONTHLY", volume=Decimal("2200"),
                 current_fte=Decimal("3"), avg_processing_time=Decimal("10"), time_unit="MINUTES",
                 run_monte_carlo=True, simulation_count=2000, simulation_seed=42,
-                growth_rate_percentage=Decimal("0"), growth_period="MONTHLY", forecast_horizon_months=12)
+                growth_rate_percentage=Decimal("0"), growth_period="MONTHLY", forecast_horizon_months=12,
+                aht_change_percentage=Decimal("0"), aht_change_period="MONTHLY")
     data.update(overrides)
     return save_forecast(ManpowerForecast(**data), user)
 
@@ -41,6 +42,7 @@ def form_data(fn, proc, **kw):
                 working_days_per_week="5", working_days_per_month="22", contingency_percentage="15",
                 run_monte_carlo="on", volume_variation_percentage="10", time_variation_percentage="15",
                 simulation_count="1000", simulation_seed="", growth_rate_percentage="0",
-                growth_period="MONTHLY", forecast_horizon_months="12", remarks="")
+                growth_period="MONTHLY", aht_change_percentage="0", aht_change_period="MONTHLY",
+                forecast_horizon_months="12", remarks="")
     base.update(kw)
     return {k: v for k, v in base.items() if v is not None}

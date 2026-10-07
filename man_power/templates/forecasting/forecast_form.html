@@ -59,13 +59,19 @@
   <div class="card shadow-sm border-0 mb-4">
     <div class="card-header bg-white fw-semibold"><i class="bi bi-4-circle text-primary"></i> Future Growth Forecast <span class="badge bg-light text-muted border ms-1">Optional</span></div>
     <div class="card-body">
+      <div class="growth-group-label"><i class="bi bi-boxes"></i> Volume</div>
       <div class="row">
         <div class="col-md-4">{% include "partials/_field.html" with field=form.growth_rate_percentage %}</div>
         <div class="col-md-4">{% include "partials/_field.html" with field=form.growth_period %}</div>
         <div class="col-md-4">{% include "partials/_field.html" with field=form.forecast_horizon_months %}</div>
       </div>
+      <div class="growth-group-label"><i class="bi bi-stopwatch"></i> Average Handling Time (AHT)</div>
+      <div class="row">
+        <div class="col-md-4">{% include "partials/_field.html" with field=form.aht_change_percentage %}</div>
+        <div class="col-md-4">{% include "partials/_field.html" with field=form.aht_change_period %}</div>
+      </div>
       <div class="capacity-preview" data-growth-preview>
-        <i class="bi bi-graph-up-arrow"></i> <span data-growth-text>Enter a growth % to project future manpower month by month.</span>
+        <i class="bi bi-graph-up-arrow"></i> <span data-growth-text>Enter a volume growth % and/or an AHT change % to project future manpower month by month.</span>
       </div>
     </div>
   </div>

@@ -25,6 +25,8 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .form-switch .form-check-input { width: 2.6em; height: 1.3em; cursor: pointer; }
 .form-switch .form-check-label { padding-left: 0.4rem; padding-top: 0.1rem; cursor: pointer; }
 .form-check-input:checked { background-color: var(--brand); border-color: var(--brand); }
+.growth-group-label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--brand); margin: 0.25rem 0 0.5rem; padding-bottom: 0.25rem; border-bottom: 1px dashed var(--gray-200); }
 
 /* ============ Status colours ============ */
 .bg-amber { background-color: var(--amber) !important; color: #212529 !important; }
@@ -36,6 +38,8 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .method-badge { font-weight: 500; padding: 0.35em 0.6em; }
 .method-mc { background: #efe7fb; color: var(--purple); border: 1px solid #d9c8f5; }
 .method-det { background: #eef1f5; color: var(--gray-600); border: 1px solid var(--gray-200); }
+.aht-badge { background: #e0f4f5; color: var(--teal); border: 1px solid #b8e2e5; font-weight: 600; }
+.driver-badge { background: var(--brand-light); color: var(--brand); border: 1px solid #cddcec; font-weight: 600; }
 
 /* Future outlook labels */
 .outlook { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600;
@@ -86,6 +90,7 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .kpi-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-600); font-weight: 600; }
 .kpi-value { font-size: 1.6rem; font-weight: 700; margin-top: 0.2rem; line-height: 1.2; }
 .kpi-value-sm { font-size: 1.2rem; }
+.kpi-unit { font-size: 0.9rem; font-weight: 600; color: var(--gray-600); }
 .kpi-muted { font-size: 1rem; font-weight: 500; color: var(--gray-600); font-style: italic; }
 .kpi-note { font-size: 0.72rem; color: var(--gray-600); margin-top: 0.15rem; }
 .kpi-blue { border-left-color: var(--brand); }
@@ -94,6 +99,7 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
 .kpi-orange { border-left-color: var(--orange); }
 .kpi-red { border-left-color: var(--red); }
 .kpi-purple { border-left-color: var(--purple); }
+.kpi-teal { border-left-color: var(--teal); }
 .kpi-gray { border-left-color: var(--gray-600); }
 
 .status-banner { border-radius: 0.6rem; padding: 1.2rem 1.4rem; color: #fff; }
@@ -173,7 +179,5 @@ body { background: var(--gray-50); color: #1d2733; font-size: 0.925rem; }
   body { background: #fff; font-size: 11px; }
   .card { box-shadow: none !important; border: 1px solid #ddd !important; break-inside: avoid; }
   .chart-box, .chart-box-lg { height: 260px; }
-  .methodology { display: block; }
-  .methodology .card-body { display: block !important; }
   a { text-decoration: none; color: inherit; }
 }

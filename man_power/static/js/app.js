@@ -1,5 +1,5 @@
 /* Global UI behaviour: sidebar, confirmation modal, loading overlay, dependent dropdown,
-   capacity preview, growth preview, Monte Carlo on/off toggle, scenario formset,
+   capacity preview, volume + AHT growth preview, Monte Carlo toggle, scenario formset,
    progress-bar widths and print. */
 (function () {
   "use strict";
@@ -130,39 +130,53 @@
   [hoursInput, contInput].forEach((el) => el && el.addEventListener("input", updatePreview));
   updatePreview();
 
-  /* ---------- Growth projection live preview (same compounding rules as the server) ---------- */
+  /* ---------- Volume growth + AHT change live preview (same compounding rules as the server) ---------- */
   const growthPreview = document.querySelector("[data-growth-preview]");
-  const growthInput = byId("id_growth_rate_percentage");
-  const periodInput = byId("id_growth_period");
-  const horizonInput = byId("id_forecast_horizon_months");
   const MONTHS_PER_PERIOD = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12 };
+  const UNIT_TO_MIN = { SECONDS: 1 / 60, MINUTES: 1, HOURS: 60 };
   function periodsElapsed(period, months, daysWeek, daysMonth) {
     if (period === "DAILY") return months * daysMonth;
     if (period === "WEEKLY") return Math.floor((months * daysMonth) / daysWeek);
     return Math.floor(months / (MONTHS_PER_PERIOD[period] || 1));
   }
+  const val = (id) => (byId(id) || {}).value;
+  const pctChange = (f) => `${f >= 1 ? "+" : ""}${((f - 1) * 100).toFixed(1)}%`;
   function updateGrowthPreview() {
-    if (!growthPreview || !growthInput) return;
+    if (!growthPreview) return;
     const text = growthPreview.querySelector("[data-growth-text]");
-    const rate = parseFloat(growthInput.value);
-    const horizon = parseInt(horizonInput && horizonInput.value, 10);
-    const volume = parseFloat((byId("id_volume") || {}).value);
-    const daysWeek = parseInt((byId("id_working_days_per_week") || {}).value, 10) || 5;
-    const daysMonth = parseInt((byId("id_working_days_per_month") || {}).value, 10) || 22;
-    if (isNaN(rate) || rate === 0) {
-      text.textContent = "No growth entered: the future projection will not be calculated.";
+    const volRate = parseFloat(val("id_growth_rate_percentage")) || 0;
+    const ahtRate = parseFloat(val("id_aht_change_percentage")) || 0;
+    const horizon = parseInt(val("id_forecast_horizon_months"), 10);
+    const daysWeek = parseInt(val("id_working_days_per_week"), 10) || 5;
+    const daysMonth = parseInt(val("id_working_days_per_month"), 10) || 22;
+    if (volRate === 0 && ahtRate === 0) {
+      text.textContent = "No volume growth or AHT change entered: the future projection will not be calculated.";
       return;
     }
     if (isNaN(horizon) || horizon < 1) { text.textContent = "Enter a forecast horizon in months."; return; }
-    const n = periodsElapsed(periodInput.value, horizon, daysWeek, daysMonth);
-    const factor = Math.pow(1 + rate / 100, n);
-    const change = (factor - 1) * 100;
-    let msg = `After ${horizon} months, volume will be ${factor.toFixed(2)}x today (${change >= 0 ? "+" : ""}${change.toFixed(1)}%)`;
-    if (!isNaN(volume) && volume > 0) msg += `: ${volume.toLocaleString()} → ${(volume * factor).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-    text.textContent = msg + ". Current FTE stays fixed in the projection.";
+    const vf = Math.pow(1 + volRate / 100, periodsElapsed(val("id_growth_period"), horizon, daysWeek, daysMonth));
+    const af = Math.pow(1 + ahtRate / 100, periodsElapsed(val("id_aht_change_period"), horizon, daysWeek, daysMonth));
+    const parts = [];
+    const volume = parseFloat(val("id_volume"));
+    if (volRate !== 0) {
+      let s = `volume ×${vf.toFixed(2)} (${pctChange(vf)})`;
+      if (!isNaN(volume) && volume > 0) s += ` ${volume.toLocaleString()} → ${(volume * vf).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      parts.push(s);
+    }
+    if (ahtRate !== 0) {
+      let s = `AHT ×${af.toFixed(2)} (${pctChange(af)})`;
+      const aht = parseFloat(val("id_avg_processing_time"));
+      const unit = UNIT_TO_MIN[val("id_time_unit")] || 1;
+      if (!isNaN(aht) && aht > 0) s += ` ${(aht * unit).toFixed(2)} → ${(aht * unit * af).toFixed(2)} min`;
+      parts.push(s);
+    }
+    const wf = vf * af;
+    text.textContent = `After ${horizon} months: ${parts.join("; ")}. Total workload ×${wf.toFixed(2)} (${pctChange(wf)}). Current FTE stays fixed in the projection.`;
   }
-  [growthInput, periodInput, horizonInput, byId("id_volume"), byId("id_working_days_per_week"),
-    byId("id_working_days_per_month")].forEach((el) => {
+  ["id_growth_rate_percentage", "id_growth_period", "id_aht_change_percentage", "id_aht_change_period",
+    "id_forecast_horizon_months", "id_volume", "id_avg_processing_time", "id_time_unit",
+    "id_working_days_per_week", "id_working_days_per_month"].forEach((id) => {
+    const el = byId(id);
     if (el) { el.addEventListener("input", updateGrowthPreview); el.addEventListener("change", updateGrowthPreview); }
   });
   updateGrowthPreview();

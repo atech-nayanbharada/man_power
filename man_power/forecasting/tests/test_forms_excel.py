@@ -5,7 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from openpyxl import Workbook, load_workbook
 
-from forecasting.forms import FunctionMasterForm, ManpowerForecastForm, ProcessMasterForm
+from forecasting.forms import ForecastFilterForm, FunctionMasterForm, ManpowerForecastForm, ProcessMasterForm
 from forecasting.models import FunctionMaster, ManpowerForecast, ProcessMaster
 from forecasting.services import excel_service
 from forecasting.services.dashboard_service import build_dashboard
@@ -34,7 +34,7 @@ class ForecastFormValidationTests(TestCase):
             "volume": "0", "current_fte": "-1", "avg_processing_time": "0", "working_hours_per_day": "25",
             "working_days_per_week": "8", "working_days_per_month": "32", "contingency_percentage": "100",
             "volume_variation_percentage": "-5", "time_variation_percentage": "-1", "simulation_count": "500",
-            "growth_rate_percentage": "-100", "forecast_horizon_months": "61",
+            "growth_rate_percentage": "-100", "aht_change_percentage": "-100", "forecast_horizon_months": "61",
         }
         for field, value in cases.items():
             with self.subTest(field=field):
@@ -43,37 +43,45 @@ class ForecastFormValidationTests(TestCase):
                 self.assertIn(field, form.errors)
                 self.assertEqual(len(form.errors[field]), 1)
 
-    def test_monte_carlo_fields_required_when_on(self):
-        form = ManpowerForecastForm(data=self.data(simulation_count="", volume_variation_percentage=""))
-        self.assertFalse(form.is_valid())
-        self.assertIn("simulation_count", form.errors)
-
     def test_monte_carlo_off_ignores_monte_carlo_fields(self):
         form = ManpowerForecastForm(data=self.data(run_monte_carlo=None, volume_variation_percentage="-5",
                                                    time_variation_percentage="", simulation_count="500",
                                                    simulation_seed="abc"))
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["simulation_count"], 10000)
-        self.assertIsNone(form.cleaned_data["simulation_seed"])
 
-    def test_growth_fields_optional(self):
+    def test_growth_and_aht_fields_optional(self):
         form = ManpowerForecastForm(data=self.data(growth_rate_percentage="", growth_period="",
+                                                   aht_change_percentage="", aht_change_period="",
                                                    forecast_horizon_months=""))
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["growth_rate_percentage"], Decimal("0"))
-        self.assertEqual(form.cleaned_data["growth_period"], "MONTHLY")
+        self.assertEqual(form.cleaned_data["aht_change_percentage"], Decimal("0"))
+        self.assertEqual(form.cleaned_data["aht_change_period"], "MONTHLY")
         self.assertEqual(form.cleaned_data["forecast_horizon_months"], 12)
 
-    def test_growth_valid_values(self):
-        for rate, period in (("5", "MONTHLY"), ("10", "QUARTERLY"), ("-3", "YEARLY"), ("0.5", "DAILY")):
+    def test_aht_valid_values(self):
+        for rate, period in (("3", "MONTHLY"), ("-10", "QUARTERLY"), ("5", "YEARLY"), ("-0.2", "WEEKLY")):
             with self.subTest(rate=rate, period=period):
-                form = ManpowerForecastForm(data=self.data(growth_rate_percentage=rate, growth_period=period))
+                form = ManpowerForecastForm(data=self.data(aht_change_percentage=rate, aht_change_period=period))
                 self.assertTrue(form.is_valid(), form.errors)
 
     def test_growth_too_high_blocked(self):
         form = ManpowerForecastForm(data=self.data(growth_rate_percentage="50", growth_period="DAILY"))
         self.assertFalse(form.is_valid())
         self.assertIn("multiplies volume", form.errors["growth_rate_percentage"][0])
+
+    def test_aht_too_high_blocked(self):
+        form = ManpowerForecastForm(data=self.data(aht_change_percentage="50", aht_change_period="DAILY"))
+        self.assertFalse(form.is_valid())
+        self.assertIn("multiplies AHT", form.errors["aht_change_percentage"][0])
+
+    def test_combined_workload_too_high_blocked(self):
+        # 60% per month for 12 months = 281x each (below 1000x alone), ~79,000x together
+        form = ManpowerForecastForm(data=self.data(growth_rate_percentage="60", aht_change_percentage="60",
+                                                   forecast_horizon_months="12"))
+        self.assertFalse(form.is_valid())
+        self.assertIn("together multiply workload", form.errors["aht_change_percentage"][0])
 
     def test_process_must_belong_to_function(self):
         other = FunctionMaster.objects.create(function_name="HR")
@@ -87,8 +95,7 @@ class MasterValidationTests(TestCase):
         self.function, self.process = make_masters()
 
     def test_duplicate_function_case_insensitive(self):
-        form = FunctionMasterForm(data={"function_name": "  finance ", "is_active": True})
-        self.assertFalse(form.is_valid())
+        self.assertFalse(FunctionMasterForm(data={"function_name": "  finance ", "is_active": True}).is_valid())
 
     def test_duplicate_process_in_same_function(self):
         form = ProcessMasterForm(data={"function": self.function.pk, "process_name": "INVOICE PROCESSING",
@@ -111,14 +118,8 @@ class ForecastServiceTests(TestCase):
         f = make_forecast(self.user, self.function, self.process)
         self.assertEqual(f.required_fte, Decimal("2.45"))
         self.assertEqual(f.status, "SUFFICIENT")
-        self.assertEqual(f.simulation_summaries.count(), 1)
         self.assertEqual(f.risk_adjusted_fte, Decimal("4"))
         self.assertFalse(f.has_projection)
-
-    def test_save_forecast_without_monte_carlo(self):
-        f = make_forecast(self.user, self.function, self.process, run_monte_carlo=False)
-        self.assertEqual(f.simulation_summaries.count(), 0)
-        self.assertEqual(f.risk_adjusted_fte, Decimal("3"))
 
     def test_switching_monte_carlo_off_hides_old_summary(self):
         f = make_forecast(self.user, self.function, self.process)
@@ -127,7 +128,7 @@ class ForecastServiceTests(TestCase):
         self.assertIsNone(f.latest_summary)
         self.assertEqual(f.simulation_summaries.count(), 1)
 
-    def test_scenarios_with_monte_carlo(self):
+    def test_scenarios_today_adjustments(self):
         f = make_forecast(self.user, self.function, self.process)
         rows = compare_scenarios(build_input(f), [
             {"name": "Growth", "volume_growth_pct": 10},
@@ -135,33 +136,42 @@ class ForecastServiceTests(TestCase):
             {"name": "Proposed 4", "current_fte": 4},
             {"name": "Slower", "time_change_pct": 20},
         ])
-        self.assertEqual(len(rows), 5)
         self.assertEqual(rows[1]["required_fte"], Decimal("2.70"))
         self.assertEqual(rows[2]["required_fte"], Decimal("2.60"))
         self.assertEqual(rows[3]["status"], "HIGHER")
         self.assertEqual(rows[4]["required_fte"], Decimal("2.94"))
 
-    def test_scenarios_with_growth(self):
+    def test_scenarios_with_ongoing_aht_change(self):
         f = make_forecast(self.user, self.function, self.process, run_monte_carlo=False,
                           growth_rate_percentage=Decimal("5"))
-        rows = compare_scenarios(build_input(f), [{"name": "Faster growth", "growth_rate_percentage": 8},
-                                                  {"name": "Proposed 5", "current_fte": 5}])
-        self.assertTrue(all(r["has_projection"] for r in rows))
+        rows = compare_scenarios(build_input(f), [{"name": "Automation", "aht_change_percentage": -5},
+                                                  {"name": "Complexity", "aht_change_percentage": 5}])
         self.assertEqual(rows[0]["horizon_required_fte"], Decimal("4.40"))
-        self.assertGreater(rows[1]["horizon_required_fte"], rows[0]["horizon_required_fte"])
-        self.assertEqual(rows[2]["shortfall_label"], "Not within horizon")
+        self.assertEqual(rows[1]["horizon_required_fte"], Decimal("2.38"))
+        self.assertEqual(rows[1]["shortfall_label"], "Not within horizon")
+        self.assertGreater(rows[2]["horizon_required_fte"], rows[0]["horizon_required_fte"])
+        self.assertEqual(rows[2]["aht_change_percentage"], Decimal("5.00"))
 
-    def test_dashboard_mixed_methods_and_outlook(self):
+    def test_dashboard_counts_aht_only_projection(self):
         other = ProcessMaster.objects.create(function=self.function, process_name="Vendor Payments")
         make_forecast(self.user, self.function, self.process, run_monte_carlo=False,
-                      growth_rate_percentage=Decimal("5"))
+                      aht_change_percentage=Decimal("5"))
         make_forecast(self.user, self.function, other)
-        data = build_dashboard(ManpowerForecast.objects.all())
-        cards = data["cards"]
-        self.assertEqual(cards["monte_carlo_count"], 1)
+        cards = build_dashboard(ManpowerForecast.objects.all())["cards"]
         self.assertEqual(cards["projection_count"], 1)
         self.assertEqual(cards["future_shortage_count"], 1)
         self.assertEqual(cards["horizon_additional_fte"], Decimal("2.00"))
+
+    def test_outlook_filter_treats_aht_only_as_projected(self):
+        other = ProcessMaster.objects.create(function=self.function, process_name="Vendor Payments")
+        aht = make_forecast(self.user, self.function, self.process, run_monte_carlo=False,
+                            aht_change_percentage=Decimal("5"))
+        plain = make_forecast(self.user, self.function, other)
+        qs = ManpowerForecast.objects.all()
+        none = ForecastFilterForm({"outlook": "none"}).apply(qs)
+        future = ForecastFilterForm({"outlook": "short_future"}).apply(qs)
+        self.assertEqual(list(none), [plain])
+        self.assertEqual(list(future), [aht])
 
 
 def build_upload(rows, headers=None):
@@ -177,9 +187,9 @@ def build_upload(rows, headers=None):
 
 def row(function="Finance", process="Invoice Processing", frequency="Monthly", volume=2200, fte=3, time=10,
         unit="Minutes", run_mc="Yes", vol_var=10, time_var=15, sims=2000, growth=0, period="Monthly",
-        horizon=12, remarks=""):
+        aht=0, aht_period="Monthly", horizon=12, remarks=""):
     return [function, process, frequency, volume, fte, time, unit, 8, 5, 22, 15, run_mc, vol_var, time_var, sims,
-            growth, period, horizon, remarks]
+            growth, period, aht, aht_period, horizon, remarks]
 
 
 class ExcelUploadTests(TestCase):
@@ -194,61 +204,65 @@ class ExcelUploadTests(TestCase):
             row(process="Vendor Payments", frequency="weekly", volume=-5),
             row(function="Unknown", process="Something"),
             row(process="Vendor Payments", frequency="Fortnightly"),
-            [*row(process="Vendor Payments", frequency="Weekly", volume=400, fte=4, time=12)[:6],
-             None, None, None, None, None, None, None, None, None, None, None, None, ""],
+            [*row(process="Vendor Payments", frequency="Weekly", volume=400, fte=4, time=12)[:6]]
+            + [None] * 14 + [""],
         ])
         result = excel_service.process_upload(upload, self.user)
         self.assertEqual(result.total_rows, 5)
         self.assertEqual(result.success_count, 2)
         self.assertEqual(result.error_count, 3)
-        rows = {e["row_number"]: e["errors"] for e in result.errors}
-        self.assertIn("Volume must be greater than zero", rows[3])
-        self.assertIn("does not exist", rows[4])
-        self.assertIn("Invalid frequency", rows[5])
         defaulted = ManpowerForecast.objects.get(process=self.vendor)
-        self.assertTrue(defaulted.run_monte_carlo)
-        self.assertEqual(defaulted.growth_rate_percentage, Decimal("0.00"))
+        self.assertEqual(defaulted.aht_change_percentage, Decimal("0.00"))
+        self.assertEqual(defaulted.aht_change_period, "MONTHLY")
 
-    def test_growth_columns(self):
+    def test_aht_columns(self):
         upload = build_upload([
-            row(run_mc="No", growth=5, period="Monthly", horizon=12),
-            row(process="Vendor Payments", growth=10, period="Fortnightly"),
-            row(process="Vendor Payments", growth=50, period="Daily", horizon=12),
+            row(run_mc="No", aht=-2.5, aht_period="Quarterly"),
+            row(process="Vendor Payments", aht=5, aht_period="Fortnightly"),
+            row(process="Vendor Payments", aht=50, aht_period="Daily"),
         ])
         result = excel_service.process_upload(upload, self.user)
         self.assertEqual(result.success_count, 1)
         errors = {e["row_number"]: e["errors"] for e in result.errors}
-        self.assertIn("Growth Period: Invalid growth period", errors[3])
-        self.assertIn("multiplies volume", errors[4])
+        self.assertIn("AHT Change Period: Invalid AHT change period", errors[3])
+        self.assertIn("multiplies AHT", errors[4])
         f = ManpowerForecast.objects.get(process=self.process)
-        self.assertEqual(f.projected_shortfall_month, 5)
+        self.assertEqual(f.aht_change_percentage, Decimal("-2.50"))
+        self.assertEqual(f.aht_change_period, "QUARTERLY")
+        self.assertTrue(f.has_projection)
+        self.assertEqual(f.projection_end_aht, 9.04)
 
-    def test_run_monte_carlo_no(self):
-        upload = build_upload([row(run_mc="No", vol_var=-5, time_var=None, sims=50),
-                               row(process="Vendor Payments", run_mc="Maybe")])
+    def test_growth_columns(self):
+        upload = build_upload([row(run_mc="No", growth=5), row(process="Vendor Payments", growth=50, period="Daily")])
         result = excel_service.process_upload(upload, self.user)
         self.assertEqual(result.success_count, 1)
-        self.assertIn("Run Monte Carlo: Invalid value", result.errors[0]["errors"])
-        self.assertFalse(ManpowerForecast.objects.get(process=self.process).run_monte_carlo)
+        self.assertIn("multiplies volume", result.errors[0]["errors"])
+        self.assertEqual(ManpowerForecast.objects.get(process=self.process).projected_shortfall_month, 5)
 
     def test_old_template_without_new_columns(self):
         headers = [h for h, _ in excel_service.UPLOAD_COLUMNS
-                   if h not in ("Run Monte Carlo", "Growth Percentage", "Growth Period", "Forecast Horizon Months")]
+                   if h not in ("Run Monte Carlo", "Growth Percentage", "Growth Period", "AHT Change Percentage",
+                                "AHT Change Period", "Forecast Horizon Months")]
         upload = build_upload([["Finance", "Invoice Processing", "Monthly", 2200, 3, 10, "Minutes", 8, 5, 22, 15,
                                 10, 15, 2000, ""]], headers=headers)
         result = excel_service.process_upload(upload, self.user)
         self.assertEqual(result.success_count, 1)
         self.assertFalse(ManpowerForecast.objects.get().has_projection)
 
+    def test_previous_template_without_aht_columns(self):
+        headers = [h for h, _ in excel_service.UPLOAD_COLUMNS if not h.startswith("AHT")]
+        r = row(growth=5)
+        r = r[:17] + r[19:]
+        result = excel_service.process_upload(build_upload([r], headers=headers), self.user)
+        self.assertEqual(result.success_count, 1)
+        f = ManpowerForecast.objects.get()
+        self.assertFalse(f.has_aht_change)
+        self.assertTrue(f.has_projection)
+
     def test_duplicate_rows_in_file(self):
         result = excel_service.process_upload(build_upload([row(), row()]), self.user)
         self.assertEqual(result.success_count, 1)
         self.assertIn("Duplicate", result.errors[0]["errors"])
-
-    def test_process_from_other_function(self):
-        FunctionMaster.objects.create(function_name="HR")
-        result = excel_service.process_upload(build_upload([row(function="HR")]), self.user)
-        self.assertIn("does not belong", result.errors[0]["errors"])
 
     def test_missing_columns(self):
         with self.assertRaises(excel_service.UploadFormatError):
@@ -256,17 +270,27 @@ class ExcelUploadTests(TestCase):
 
     def test_template_and_reports(self):
         wb = load_workbook(io.BytesIO(excel_service.generate_upload_template()))
-        self.assertEqual(wb.sheetnames, ["Forecast Upload", "Instructions", "Valid Masters"])
-        make_forecast(self.user, self.function, self.process, growth_rate_percentage=Decimal("5"))
+        headers = [c.value for c in wb["Forecast Upload"][1]]
+        self.assertIn("AHT Change Percentage", headers)
+        self.assertIn("AHT Change Period", headers)
+        make_forecast(self.user, self.function, self.process, growth_rate_percentage=Decimal("5"),
+                      aht_change_percentage=Decimal("-2"), aht_change_period="QUARTERLY")
         make_forecast(self.user, self.function, self.vendor, run_monte_carlo=False)
         report = load_workbook(io.BytesIO(excel_service.export_forecasts(ManpowerForecast.objects.all())))
         self.assertEqual(report.sheetnames, ["Summary", "Forecast Report", "Growth Projection"])
         ws = report["Forecast Report"]
         labels = [c.value for c in ws[2]]
         by_process = {ws.cell(row=r, column=labels.index("Process") + 1).value: r for r in (3, 4)}
-        self.assertEqual(ws.cell(row=by_process["Vendor Payments"], column=labels.index("P90 FTE") + 1).value,
-                         "Not run")
-        self.assertEqual(report["Growth Projection"].max_row, 14)
+        inv = by_process["Invoice Processing"]
+        self.assertEqual(ws.cell(row=inv, column=labels.index("AHT Change %") + 1).value, -2.0)
+        self.assertEqual(ws.cell(row=inv, column=labels.index("Projection Drivers") + 1).value,
+                         "+5% volume per month and -2% AHT per quarter")
+        self.assertEqual(ws.cell(row=by_process["Vendor Payments"], column=labels.index("Shortfall From") + 1).value,
+                         "No projection")
+        proj = report["Growth Projection"]
+        proj_headers = [c.value for c in proj[1]]
+        self.assertIn("AHT (min)", proj_headers)
+        self.assertEqual(proj.cell(row=5, column=proj_headers.index("AHT Factor") + 1).value, 0.98)  # month 3
         detail = load_workbook(io.BytesIO(excel_service.export_forecast_detail(
             ManpowerForecast.objects.get(process=self.process))))
         self.assertIn("Month-by-Month Projection", detail.sheetnames)

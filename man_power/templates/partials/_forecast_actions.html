@@ -2,7 +2,7 @@
   {% if can_edit %}
   <a href="{% url 'forecasting:forecast_update' f.pk %}" class="btn btn-outline-primary btn-sm"><i class="bi bi-pencil"></i> Edit</a>
   {% if f.run_monte_carlo %}
-  <button type="button" class="btn btn-outline-primary btn-sm" data-confirm-url="{% url 'forecasting:forecast_rerun' f.pk %}" data-confirm-title="Re-run simulation" data-confirm-message="Re-run the Monte Carlo simulation and growth projection? The forecast will be resubmitted for approval." data-confirm-button="Re-run" data-confirm-class="btn-primary" data-loading="true"><i class="bi bi-arrow-repeat"></i> Re-run Simulation</button>
+  <button type="button" class="btn btn-outline-primary btn-sm" data-confirm-url="{% url 'forecasting:forecast_rerun' f.pk %}" data-confirm-title="Re-run simulation" data-confirm-message="Re-run the Monte Carlo simulation and future projection? The forecast will be resubmitted for approval." data-confirm-button="Re-run" data-confirm-class="btn-primary" data-loading="true"><i class="bi bi-arrow-repeat"></i> Re-run Simulation</button>
   <button type="button" class="btn btn-outline-secondary btn-sm" data-confirm-url="{% url 'forecasting:forecast_rerun' f.pk %}?monte_carlo=off" data-confirm-title="Switch off Monte Carlo" data-confirm-message="Recalculate this forecast using the deterministic calculation only? The status may change and the forecast will be resubmitted for approval." data-confirm-button="Switch off" data-confirm-class="btn-secondary" data-loading="true"><i class="bi bi-calculator"></i> Deterministic Only</button>
   {% else %}
   <button type="button" class="btn btn-outline-primary btn-sm" data-confirm-url="{% url 'forecasting:forecast_rerun' f.pk %}" data-confirm-title="Recalculate" data-confirm-message="Recalculate this forecast? It will be resubmitted for approval." data-confirm-button="Recalculate" data-confirm-class="btn-primary" data-loading="true"><i class="bi bi-arrow-repeat"></i> Recalculate</button>
@@ -34,7 +34,7 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p class="small text-muted mb-3">Maker: {{ f.created_by.username|default:"-" }} &middot; Status: {{ f.get_status_display }} &middot; {% if f.run_monte_carlo %}With Monte Carlo{% else %}Deterministic only{% endif %}{% if f.has_projection %} &middot; {{ f.forecast_horizon_months }}-month growth projection{% endif %}</p>
+        <p class="small text-muted mb-3">Maker: {{ f.created_by.username|default:"-" }} &middot; Status: {{ f.get_status_display }} &middot; {% if f.run_monte_carlo %}With Monte Carlo{% else %}Deterministic only{% endif %}{% if f.has_projection %} &middot; {{ f.forecast_horizon_months }}-month projection ({{ f.growth_drivers_text }}){% endif %}</p>
         {% include "partials/_field.html" with field=approval_form.decision %}
         {% include "partials/_field.html" with field=approval_form.comments %}
         <div class="form-text">Comments are mandatory for rejection.</div>

@@ -1,6 +1,6 @@
 """
 Orchestration: deterministic calculation + optional Monte Carlo + status classification
-+ optional growth projection, persisted with a simulation summary and an audit log.
++ optional growth projection (volume and/or AHT), persisted with a simulation summary and an audit log.
 """
 import secrets
 from dataclasses import dataclass, replace
@@ -22,6 +22,7 @@ INPUT_FIELDS = (
     "working_days_per_week", "working_days_per_month", "contingency_percentage", "run_monte_carlo",
     "volume_variation_percentage", "time_variation_percentage", "simulation_count", "simulation_seed",
     "growth_rate_percentage", "growth_period", "forecast_horizon_months",
+    "aht_change_percentage", "aht_change_period",
 )
 RESULT_FIELDS = (
     "daily_volume", "processing_time_minutes", "productive_minutes_per_fte", "workload_minutes",
@@ -77,7 +78,7 @@ def compute_forecast(inp: ForecastInput) -> ForecastComputation:
 
 
 def compute_projection(inp: ForecastInput, start_date=None) -> Optional[ProjectionResult]:
-    """Growth projection, or None when no growth rate is entered."""
+    """Projection, or None when neither volume growth nor AHT change is entered."""
     if not inp.has_growth:
         return None
     return run_projection(inp, compute_forecast, start_date or timezone.localdate())

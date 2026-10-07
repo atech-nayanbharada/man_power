@@ -59,6 +59,8 @@ def projection_chart_data(forecast):
         "status": [p["status"] for p in points],
         "utilization": [p["utilization"] for p in points],
         "sufficiency": [p["sufficiency"] for p in points] if forecast.run_monte_carlo else None,
+        "aht": [p.get("aht_minutes") for p in points],
+        "has_aht_change": forecast.has_aht_change,
         "shortfall_index": forecast.projected_shortfall_month,
     }
 
@@ -173,7 +175,7 @@ class ForecastCreateView(RoleRequiredMixin, CreateView):
         self.object = forecast
         method = "calculated and simulated" if forecast.run_monte_carlo else "calculated (deterministic only)"
         if forecast.has_projection:
-            method += f" with a {forecast.forecast_horizon_months}-month growth projection"
+            method += f" with a {forecast.forecast_horizon_months}-month projection ({forecast.growth_drivers_text})"
         messages.success(self.request, f"Forecast #{forecast.pk} {method} and submitted for approval.")
         return redirect("forecasting:forecast_result", pk=forecast.pk)
 
@@ -266,7 +268,7 @@ class ForecastDeleteView(RoleRequiredMixin, View):
 
 class ForecastRerunView(RoleRequiredMixin, View):
     """
-    Recalculate a forecast (including the growth projection). Optional query parameter:
+    Recalculate a forecast (including the projection). Optional query parameter:
       ?monte_carlo=on  -> switch Monte Carlo on and run it
       ?monte_carlo=off -> switch Monte Carlo off (deterministic only)
     """

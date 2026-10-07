@@ -1,7 +1,8 @@
 """
-Growth projection: how manpower sufficiency changes month by month when volume grows (or declines).
+Growth projection: how manpower sufficiency changes month by month when VOLUME and/or
+AVERAGE HANDLING TIME (AHT) change in the future.
 
-Volume growth is compounded per growth period and applied in steps:
+Each driver is compounded per its own period and applied in steps:
   Daily       -> once per working day     (month m = m x working days per month periods)
   Weekly      -> once per completed week  (floor(m x days per month / days per week))
   Monthly     -> once per month           (m)
@@ -9,10 +10,12 @@ Volume growth is compounded per growth period and applied in steps:
   Half-Yearly -> once every 6 months      (floor(m / 6))
   Yearly      -> once every 12 months     (floor(m / 12))
 
-  Projected volume(m) = Current volume x (1 + growth% / 100) ^ periods_elapsed(m)
+  Volume(m) = Volume x (1 + volume growth% / 100) ^ periods_elapsed(volume period, m)
+  AHT(m)    = AHT    x (1 + AHT change%    / 100) ^ periods_elapsed(AHT period, m)
+  Workload(m) = Volume(m) x AHT(m)      ->  workload factor = volume factor x AHT factor
 
 For every month 0..horizon the full forecast (deterministic + optional Monte Carlo + status)
-is recalculated with the projected volume while current FTE stays fixed.
+is recalculated with the projected volume and AHT while current FTE stays fixed.
 """
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -46,7 +49,17 @@ def periods_elapsed(growth_period: str, month: int, working_days_per_week: int, 
 
 def growth_factor(growth_rate_pct, growth_period, month, working_days_per_week=5, working_days_per_month=22) -> Decimal:
     rate = Decimal("1") + to_decimal(growth_rate_pct) / Decimal("100")
-    return rate ** periods_elapsed(growth_period, month, working_days_per_week, working_days_per_month)
+    return rate ** periods_elapsed(growth_period or "MONTHLY", month, working_days_per_week, working_days_per_month)
+
+
+def workload_factors(inp_or_values, month):
+    """Return (volume_factor, aht_factor, workload_factor) for a month."""
+    g = inp_or_values
+    vf = growth_factor(g.growth_rate_percentage, g.growth_period, month, g.working_days_per_week,
+                       g.working_days_per_month)
+    af = growth_factor(g.aht_change_percentage, g.aht_change_period, month, g.working_days_per_week,
+                       g.working_days_per_month)
+    return vf, af, vf * af
 
 
 def add_months(start: date, months: int) -> date:
@@ -77,18 +90,21 @@ def run_projection(inp: ForecastInput, compute_fn: Callable, start_date: date) -
     current = inp.current_fte
     points = []
     for m in range(inp.forecast_horizon_months + 1):
-        factor = growth_factor(inp.growth_rate_percentage, inp.growth_period, m,
-                               inp.working_days_per_week, inp.working_days_per_month)
-        projected_volume = inp.volume * factor
-        comp = compute_fn(replace(inp, volume=projected_volume))
+        vf, af, wf = workload_factors(inp, m)
+        projected = replace(inp, volume=inp.volume * vf, avg_processing_time=inp.avg_processing_time * af)
+        comp = compute_fn(projected)
         det, mc, st = comp.deterministic, comp.monte_carlo, comp.status
         needed = Decimal(mc.risk_adjusted_recommended_fte) if mc else det.recommended_operational_fte
         points.append({
             "month": m,
             "label": month_label(start_date, m),
-            "growth_factor": float(q(factor, "0.0001")),
-            "volume": float(q(projected_volume)),
+            "growth_factor": float(q(vf, "0.0001")),
+            "aht_factor": float(q(af, "0.0001")),
+            "workload_factor": float(q(wf, "0.0001")),
+            "volume": float(q(projected.volume)),
             "daily_volume": float(q(det.daily_volume)),
+            "aht": float(q(projected.avg_processing_time)),
+            "aht_minutes": float(q(det.processing_time_minutes)),
             "required_fte": float(det.required_fte),
             "operational_fte": float(det.recommended_operational_fte),
             "p90_fte": round(mc.p90_required_fte, 2) if mc else None,
@@ -129,14 +145,29 @@ def build_hiring_plan(points, current_fte) -> list:
     return plan
 
 
+def drivers_text(inp: ForecastInput) -> str:
+    drivers = []
+    if inp.has_volume_growth:
+        word = "growth" if inp.growth_rate_percentage > 0 else "decline"
+        drivers.append(f"{fmt(abs(inp.growth_rate_percentage))}% volume {word} per "
+                       f"{PERIOD_LABELS.get(inp.growth_period, inp.growth_period.lower())}")
+    if inp.has_aht_change:
+        word = "increase" if inp.aht_change_percentage > 0 else "reduction"
+        drivers.append(f"{fmt(abs(inp.aht_change_percentage))}% AHT {word} per "
+                       f"{PERIOD_LABELS.get(inp.aht_change_period, inp.aht_change_period.lower())}")
+    return " and ".join(drivers)
+
+
 def build_summary(points, shortfall, current_fte, inp: ForecastInput) -> str:
     basis = "risk-adjusted P90" if inp.run_monte_carlo else "operational"
-    period = PERIOD_LABELS.get(inp.growth_period, inp.growth_period.lower())
-    direction = "growth" if inp.growth_rate_percentage > 0 else "decline"
     first, last = points[0], points[-1]
     end = f"{last['label']} (month {last['month']})"
-    head = (f"With {fmt(abs(inp.growth_rate_percentage))}% volume {direction} per {period}, volume moves from "
-            f"{fmt(first['volume'])} to {fmt(last['volume'])} by {end}, and required FTE from "
+    changes = []
+    if inp.has_volume_growth:
+        changes.append(f"volume moves from {fmt(first['volume'])} to {fmt(last['volume'])}")
+    if inp.has_aht_change:
+        changes.append(f"AHT moves from {fmt(first['aht_minutes'])} to {fmt(last['aht_minutes'])} minutes")
+    head = (f"With {drivers_text(inp)}, {' and '.join(changes)} by {end}, and required FTE moves from "
             f"{fmt(first['required_fte'])} to {fmt(last['required_fte'])}. ")
     extra = max(Decimal("0"), Decimal(str(last["fte_needed"])) - current_fte)
 
@@ -151,7 +182,8 @@ def build_summary(points, shortfall, current_fte, inp: ForecastInput) -> str:
         recovered = next((p for p in points if p["status"] != "LESS"), None)
         text = "Manpower is already insufficient today."
         if recovered:
-            text += f" With the projected decline, current manpower becomes sufficient from {recovered['label']} (month {recovered['month']})."
+            text += (f" As the workload falls, current manpower becomes sufficient from {recovered['label']} "
+                     f"(month {recovered['month']}).")
         elif extra > 0:
             text += (f" By {end} the process needs {fmt(last['fte_needed'])} FTE ({basis}), "
                      f"{fmt(extra)} more than today.")

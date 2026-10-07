@@ -1,6 +1,6 @@
 """
 Load sample functions, processes, role users and forecasts covering every status,
-with and without Monte Carlo, and with different growth projections.
+with and without Monte Carlo, and with different volume growth and AHT change projections.
 
 Demo users (password: Demo@12345):
   admin_user (Admin), analyst_user (Analyst), analyst2_user (Analyst),
@@ -46,19 +46,19 @@ MASTERS = {
 }
 
 # (process, frequency, volume, current_fte, avg_time, unit, contingency, run_mc, approve,
-#  growth %, growth period, horizon months)
+#  volume growth %, growth period, horizon months, AHT change %, AHT change period)
 FORECASTS = [
-    ("Invoice Processing", "MONTHLY", 2200, 3, 10, "MINUTES", 15, True, True, 3, "MONTHLY", 12),
-    ("Vendor Payments", "WEEKLY", 400, 4, 12, "MINUTES", 15, True, True, 10, "QUARTERLY", 24),
-    ("Bank Reconciliation", "DAILY", 150, 2, 6, "MINUTES", 15, True, True, 0, "MONTHLY", 12),
-    ("GST Return Filing", "MONTHLY", 300, 1, 1, "HOURS", 15, False, False, 0, "MONTHLY", 12),
-    ("Employee Onboarding", "MONTHLY", 120, 2, 2, "HOURS", 15, True, True, 15, "YEARLY", 36),
-    ("Payroll Processing", "MONTHLY", 5000, 2, 90, "SECONDS", 15, False, True, 8, "HALF_YEARLY", 36),
-    ("Leave Management", "DAILY", 300, 1, 75, "SECONDS", 15, False, False, -2, "MONTHLY", 12),
-    ("Purchase Order Creation", "DAILY", 180, 5, 8, "MINUTES", 15, True, True, 2, "MONTHLY", 18),
-    ("Vendor Registration", "WEEKLY", 60, 1, 25, "MINUTES", 15, True, False, 0, "MONTHLY", 12),
-    ("Email Ticket Resolution", "DAILY", 600, 8, 4, "MINUTES", 15, True, True, 0.5, "WEEKLY", 12),
-    ("Complaint Handling", "WEEKLY", 900, 3, 15, "MINUTES", 20, True, False, 5, "QUARTERLY", 12),
+    ("Invoice Processing", "MONTHLY", 2200, 3, 10, "MINUTES", 15, True, True, 3, "MONTHLY", 12, -2, "QUARTERLY"),
+    ("Vendor Payments", "WEEKLY", 400, 4, 12, "MINUTES", 15, True, True, 10, "QUARTERLY", 24, 0, "MONTHLY"),
+    ("Bank Reconciliation", "DAILY", 150, 2, 6, "MINUTES", 15, True, True, 0, "MONTHLY", 12, -5, "QUARTERLY"),
+    ("GST Return Filing", "MONTHLY", 300, 1, 1, "HOURS", 15, False, False, 0, "MONTHLY", 12, 0, "MONTHLY"),
+    ("Employee Onboarding", "MONTHLY", 120, 2, 2, "HOURS", 15, True, True, 15, "YEARLY", 36, 0, "MONTHLY"),
+    ("Payroll Processing", "MONTHLY", 5000, 2, 90, "SECONDS", 15, False, True, 8, "HALF_YEARLY", 36, 0, "MONTHLY"),
+    ("Leave Management", "DAILY", 300, 1, 75, "SECONDS", 15, False, False, -2, "MONTHLY", 12, 0, "MONTHLY"),
+    ("Purchase Order Creation", "DAILY", 180, 5, 8, "MINUTES", 15, True, True, 2, "MONTHLY", 18, 0, "MONTHLY"),
+    ("Vendor Registration", "WEEKLY", 60, 1, 25, "MINUTES", 15, True, False, 0, "MONTHLY", 24, 10, "YEARLY"),
+    ("Email Ticket Resolution", "DAILY", 600, 8, 4, "MINUTES", 15, True, True, 0.5, "WEEKLY", 12, 0, "MONTHLY"),
+    ("Complaint Handling", "WEEKLY", 900, 3, 15, "MINUTES", 20, True, False, 5, "QUARTERLY", 12, 3, "HALF_YEARLY"),
 ]
 
 
@@ -102,7 +102,8 @@ class Command(BaseCommand):
 
         makers = [users["analyst_user"], users["analyst2_user"]]
         for i, row in enumerate(FORECASTS):
-            pname, freq, vol, fte, t, unit, cont, run_mc, approve, growth, gperiod, horizon = row
+            (pname, freq, vol, fte, t, unit, cont, run_mc, approve, growth, gperiod, horizon,
+             aht, aht_period) = row
             process = processes[pname]
             forecast = ManpowerForecast(
                 function=process.function, process=process, frequency=freq, volume=Decimal(vol),
@@ -110,6 +111,7 @@ class Command(BaseCommand):
                 contingency_percentage=Decimal(cont), run_monte_carlo=run_mc,
                 simulation_count=10000, simulation_seed=42 if run_mc else None,
                 growth_rate_percentage=Decimal(str(growth)), growth_period=gperiod,
+                aht_change_percentage=Decimal(str(aht)), aht_change_period=aht_period,
                 forecast_horizon_months=horizon,
                 remarks="Sample data" + ("" if run_mc else " (deterministic only)"),
             )
@@ -120,9 +122,10 @@ class Command(BaseCommand):
                 forecast.approved_at = timezone.now()
                 forecast.approval_comments = "Reviewed - sample approval."
                 forecast.save()
-            outlook = {"none": "no growth", "ok": "OK through horizon", "short_now": "short now",
+            outlook = {"none": "no projection", "ok": "OK through horizon", "short_now": "short now",
                        "short_future": f"short from {forecast.shortfall_label}"}[forecast.outlook]
+            drivers = f" [{forecast.growth_drivers_text}]" if forecast.has_projection else ""
             self.stdout.write(f"  {pname:<26} {'MC ' if run_mc else 'DET'} -> {forecast.get_status_display():<20} "
-                              f"Req {forecast.required_fte} / Cur {forecast.current_fte} | {outlook}")
+                              f"Req {forecast.required_fte} / Cur {forecast.current_fte} | {outlook}{drivers}")
         self.stdout.write(self.style.SUCCESS(
             f"Loaded {len(processes)} processes and {len(FORECASTS)} forecasts. Demo password: {DEMO_PASSWORD}"))

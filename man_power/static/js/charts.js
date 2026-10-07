@@ -120,17 +120,25 @@
     projection: () => {
       const p = data.projection;
       const sets = [
-        { type: "bar", label: "FTE Needed", data: p.needed, order: 3,
+        { type: "bar", label: "FTE Needed", data: p.needed, order: 3, yAxisID: "y",
           backgroundColor: p.status.map((s) => alpha(STATUS_COLOR[s], 0.33)),
           borderColor: p.status.map((s) => STATUS_COLOR[s]), borderWidth: 1 },
         { type: "line", label: "Required FTE", data: p.required, borderColor: C.blue, backgroundColor: C.blue,
-          tension: 0.25, pointRadius: 3, order: 1 },
+          tension: 0.25, pointRadius: 3, order: 1, yAxisID: "y" },
         { type: "line", label: "Current FTE", data: p.current, borderColor: C.gray, borderDash: [6, 4],
-          pointRadius: 0, fill: false, order: 0 },
+          pointRadius: 0, fill: false, order: 0, yAxisID: "y" },
       ];
       if (p.p90) {
         sets.push({ type: "line", label: "P90 FTE", data: p.p90, borderColor: C.purple, backgroundColor: C.purple,
-          tension: 0.25, pointRadius: 2, order: 2 });
+          tension: 0.25, pointRadius: 2, order: 2, yAxisID: "y" });
+      }
+      const scales = { y: { beginAtZero: true, title: { display: true, text: "FTE" } },
+        x: { ticks: { maxRotation: 60, autoSkip: true } } };
+      if (p.has_aht_change && p.aht) {
+        sets.push({ type: "line", label: "AHT (min)", data: p.aht, borderColor: C.teal, backgroundColor: C.teal,
+          borderDash: [3, 3], stepped: true, pointRadius: 0, order: 0, yAxisID: "yAht" });
+        scales.yAht = { position: "right", grid: { drawOnChartArea: false },
+          title: { display: true, text: "AHT (minutes)" } };
       }
       return {
         type: "bar",
@@ -148,8 +156,7 @@
               return lines;
             } } },
           },
-          scales: { y: { beginAtZero: true, title: { display: true, text: "FTE" } },
-            x: { ticks: { maxRotation: 60, autoSkip: true } } },
+          scales,
         },
       };
     },
@@ -271,7 +278,7 @@
           scales: {
             x: { min: 0, suggestedMax: 150, title: { display: true, text: "Utilization today (%)" },
               ticks: { callback: (v) => `${v}%` } },
-            y: { min: -1, max: m.horizon + 2, reverse: false, title: { display: true, text: "Months until shortage" },
+            y: { min: -1, max: m.horizon + 2, title: { display: true, text: "Months until shortage" },
               ticks: { stepSize: Math.max(1, Math.round(m.horizon / 6)),
                 callback: (v) => (v > m.horizon ? "None" : v < 0 ? "" : v) } },
           },
