@@ -1,8 +1,13 @@
 """
 Data model for the Manpower Capacity Planning and Monte Carlo Forecasting System.
 Business values use DecimalField; design is PostgreSQL-compatible.
+
+AHT (average handling time, minutes per item) is stored in `avg_processing_time` (always minutes).
+It is either entered (measured) or calculated with the "Calculate AHT" button:
+    AHT = Current FTE x Working hours per day x Working days in period x 60 / Volume
+(contingency not deducted). `total_time_spent_hours` is kept in line with AHT (AHT x volume / 60).
 """
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -43,10 +48,16 @@ PERIOD_WORDS = {"DAILY": "day", "WEEKLY": "week", "MONTHLY": "month", "QUARTERLY
 
 
 def pct_text(value) -> str:
-    """Signed percentage without trailing zeros: +5, -2.5."""
     d = Decimal(str(value)).normalize()
     text = f"{d:f}"
-    return f"+{text}" if d > 0 else text
+    return text if d < 0 else f"+{text}"
+
+
+def whole_fte(value):
+    """Required headcount is shown in whole people: always round UP (2.45 -> 3)."""
+    if value is None:
+        return None
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_CEILING))
 
 
 def default_run_monte_carlo():
@@ -122,19 +133,29 @@ class ManpowerForecast(TimeStampedModel):
     frequency = models.CharField(max_length=20, choices=Frequency.choices)
     volume = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     current_fte = models.DecimalField(max_digits=8, decimal_places=2, validators=[MinValueValidator(Decimal("0"))])
+    total_time_spent_hours = models.DecimalField(
+        "Total time spent (hours)", max_digits=16, decimal_places=4, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+        help_text="Total hands-on hours spent processing the volume in the selected period. AHT is calculated from it.",
+    )
     avg_processing_time = models.DecimalField(
-        max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))]
+        "Average handling time (min)", max_digits=14, decimal_places=4, default=Decimal("0"),
+        help_text="Calculated automatically: total time spent x 60 / volume (minutes per item).",
     )
     time_unit = models.CharField(max_length=10, choices=TimeUnit.choices, default=TimeUnit.MINUTES)
     working_hours_per_day = models.DecimalField(
         max_digits=4, decimal_places=2, default=Decimal("8"),
         validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(Decimal("24"))],
     )
-    working_days_per_week = models.PositiveSmallIntegerField(
-        default=5, validators=[MinValueValidator(1), MaxValueValidator(7)]
+    working_days_per_week = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal("5"),
+        validators=[MinValueValidator(Decimal("0.5")), MaxValueValidator(Decimal("7"))],
+        help_text="Full-day equivalents, e.g. 5.5 for Mon-Fri full days plus a Saturday half day.",
     )
-    working_days_per_month = models.PositiveSmallIntegerField(
-        default=22, validators=[MinValueValidator(1), MaxValueValidator(31)]
+    working_days_per_month = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("22"),
+        validators=[MinValueValidator(Decimal("1")), MaxValueValidator(Decimal("31"))],
+        help_text="Full-day equivalents per month, e.g. 23.83 for 5.5 days a week.",
     )
     contingency_percentage = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal("15"),
@@ -187,6 +208,14 @@ class ManpowerForecast(TimeStampedModel):
         help_text="Empty when Current FTE is zero (utilization undefined).",
     )
     unused_capacity_percentage = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    breakeven_aht_minutes = models.DecimalField(
+        "Break-even AHT (min)", max_digits=14, decimal_places=4, null=True, blank=True,
+        help_text="Longest average time per item the current FTE can handle (current FTE x productive minutes / daily volume).",
+    )
+    aht_headroom_percentage = models.DecimalField(
+        "AHT headroom %", max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="How far AHT can rise (+) or must fall (-) before current FTE is exactly enough.",
+    )
     status = models.CharField(max_length=20, choices=ManpowerStatus.choices, db_index=True)
     high_utilization_risk = models.BooleanField(default=False)
     recommendation = models.TextField(blank=True)
@@ -236,7 +265,6 @@ class ManpowerForecast(TimeStampedModel):
 
     @property
     def risk_adjusted_fte(self):
-        """ceil(P90) when Monte Carlo ran, otherwise the operational (deterministic) FTE."""
         summary = self.latest_summary
         return summary.risk_adjusted_recommended_fte if summary else self.recommended_operational_fte
 
@@ -252,6 +280,49 @@ class ManpowerForecast(TimeStampedModel):
     def approval_css(self):
         return {"APPROVED": "success", "REJECTED": "danger", "PENDING": "info"}.get(self.approval_status, "secondary")
 
+    # ---------- AHT / headcount helpers ----------
+    @property
+    def available_time_hours(self):
+        """Team working time in the period (contingency not deducted) - the basis of Calculate AHT."""
+        from .services.calculations import available_time_in_period
+        return available_time_in_period(self.current_fte, self.working_hours_per_day, self.contingency_percentage,
+                                        self.frequency, self.working_days_per_week, self.working_days_per_month)
+
+    @property
+    def total_time_matches_capacity(self):
+        """
+        True when AHT was calculated from team working time (Calculate AHT) rather than measured.
+        The status is then not a real measure, and the app shows a warning.
+        """
+        total = getattr(self, "total_time_spent_hours", None)
+        available = self.available_time_hours
+        if total is None or not available:
+            return False
+        return abs(total - available) <= available * Decimal("0.005")
+
+    @property
+    def aht_is_calculated(self):
+        return self.total_time_matches_capacity
+
+    @property
+    def required_people(self):
+        """Required headcount in whole people (exact workload FTE rounded up)."""
+        return whole_fte(self.required_fte)
+
+    @property
+    def people_gap(self):
+        """Current FTE (may be decimal) minus required whole people. Negative = short."""
+        return (self.current_fte or Decimal("0")) - (self.required_people or 0)
+
+    @property
+    def aht_headroom_css(self):
+        h = getattr(self, "aht_headroom_percentage", None)
+        if h is None:
+            return "text-muted"
+        if h < 0:
+            return "text-danger"
+        return "text-amber" if h < 10 else "text-success"
+
     # ---------- Growth projection helpers ----------
     @property
     def has_volume_growth(self):
@@ -263,7 +334,6 @@ class ManpowerForecast(TimeStampedModel):
 
     @property
     def growth_drivers(self):
-        """Human-readable list of the projection drivers, e.g. ['+5% volume per month', '-2% AHT per quarter']."""
         drivers = []
         if self.has_volume_growth:
             drivers.append(f"{pct_text(self.growth_rate_percentage)}% volume per "
@@ -323,7 +393,6 @@ class ManpowerForecast(TimeStampedModel):
 
     @property
     def outlook(self):
-        """Short code for templates: none / short_now / short_future / ok."""
         if not self.has_projection:
             return "none"
         month = self.projected_shortfall_month

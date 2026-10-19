@@ -1,6 +1,9 @@
 """
 Deterministic manpower capacity calculations.
 Pure functions (no database access) so they are reusable and unit-testable.
+
+Working days are full-day equivalents and may be decimals, e.g. 5.5 days a week.
+Current FTE and Volume may be decimals.
 """
 from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
@@ -9,14 +12,21 @@ from typing import Optional
 MINUTES_PER_HOUR = Decimal("60")
 HUNDRED = Decimal("100")
 
-# Working days in each frequency period (configurable week/month working days)
 FREQUENCY_WORKING_DAYS = {
     "DAILY": lambda wk, mo: Decimal("1"),
-    "WEEKLY": lambda wk, mo: Decimal(wk),
-    "MONTHLY": lambda wk, mo: Decimal(mo),
-    "QUARTERLY": lambda wk, mo: Decimal(mo) * 3,
-    "HALF_YEARLY": lambda wk, mo: Decimal(mo) * 6,
-    "YEARLY": lambda wk, mo: Decimal(mo) * 12,
+    "WEEKLY": lambda wk, mo: wk,
+    "MONTHLY": lambda wk, mo: mo,
+    "QUARTERLY": lambda wk, mo: mo * 3,
+    "HALF_YEARLY": lambda wk, mo: mo * 6,
+    "YEARLY": lambda wk, mo: mo * 12,
+}
+FREQUENCY_DAYS_TEXT = {
+    "DAILY": "1 working day",
+    "WEEKLY": "{wk} working days per week",
+    "MONTHLY": "{mo} working days per month",
+    "QUARTERLY": "{mo} days x 3 months",
+    "HALF_YEARLY": "{mo} days x 6 months",
+    "YEARLY": "{mo} days x 12 months",
 }
 
 
@@ -29,7 +39,6 @@ def to_decimal(value) -> Decimal:
 
 
 def q(value, places: str = "0.01") -> Decimal:
-    """Round half-up to the given precision."""
     return to_decimal(value).quantize(Decimal(places), rounding=ROUND_HALF_UP)
 
 
@@ -38,7 +47,7 @@ def ceil_decimal(value) -> Decimal:
 
 
 def fmt(value) -> str:
-    """Human-friendly number: 3 instead of 3.00, 2.45 stays 2.45."""
+    """Human-friendly number: 3 instead of 3.00, 2.45 stays 2.45, 2.50 -> 2.5."""
     d = q(value)
     return f"{d:f}".rstrip("0").rstrip(".") if "." in f"{d:f}" else f"{d:f}"
 
@@ -50,11 +59,14 @@ def safe_divide(numerator, denominator, default: Optional[Decimal] = Decimal("0"
     return numerator / denominator
 
 
-def convert_to_daily_volume(volume, frequency, working_days_per_week, working_days_per_month) -> Decimal:
+def working_days_in_period(frequency, working_days_per_week, working_days_per_month) -> Decimal:
     if frequency not in FREQUENCY_WORKING_DAYS:
         raise ValueError(f"Unsupported frequency: {frequency}")
-    days = FREQUENCY_WORKING_DAYS[frequency](int(working_days_per_week), int(working_days_per_month))
-    return safe_divide(volume, days)
+    return FREQUENCY_WORKING_DAYS[frequency](to_decimal(working_days_per_week), to_decimal(working_days_per_month))
+
+
+def convert_to_daily_volume(volume, frequency, working_days_per_week, working_days_per_month) -> Decimal:
+    return safe_divide(volume, working_days_in_period(frequency, working_days_per_week, working_days_per_month))
 
 
 def convert_time_to_minutes(avg_time, time_unit) -> Decimal:
@@ -66,6 +78,29 @@ def convert_time_to_minutes(avg_time, time_unit) -> Decimal:
     if time_unit == "HOURS":
         return value * MINUTES_PER_HOUR
     raise ValueError(f"Unsupported time unit: {time_unit}")
+
+
+def aht_from_total_time(total_time_hours, volume) -> Optional[Decimal]:
+    """AHT (minutes per item) = total time (hours) x 60 / volume."""
+    total, vol = to_decimal(total_time_hours), to_decimal(volume)
+    if total <= 0 or vol <= 0:
+        return None
+    return total * MINUTES_PER_HOUR / vol
+
+
+def available_time_in_period(current_fte, working_hours_per_day, contingency_percentage, frequency,
+                             working_days_per_week, working_days_per_month) -> Optional[Decimal]:
+    """
+    Team working time in the period (hours) used by Calculate AHT:
+        Current FTE x Working hours per day x Working days in the period
+    Contingency is NOT deducted here (the argument is kept for a stable signature);
+    it is applied when Required FTE is calculated.
+    """
+    try:
+        days = working_days_in_period(frequency, working_days_per_week, working_days_per_month)
+    except ValueError:
+        return None
+    return q(to_decimal(current_fte) * to_decimal(working_hours_per_day) * days, "0.0001")
 
 
 @dataclass
@@ -93,8 +128,8 @@ class ForecastInput:
     avg_processing_time: Decimal
     time_unit: str = "MINUTES"
     working_hours_per_day: Decimal = Decimal("8")
-    working_days_per_week: int = 5
-    working_days_per_month: int = 22
+    working_days_per_week: Decimal = Decimal("5")
+    working_days_per_month: Decimal = Decimal("22")
     contingency_percentage: Decimal = Decimal("15")
     run_monte_carlo: bool = True
     volume_variation_percentage: Decimal = Decimal("10")
@@ -109,16 +144,17 @@ class ForecastInput:
 
     def __post_init__(self):
         defaults = {"volume_variation_percentage": Decimal("10"), "time_variation_percentage": Decimal("15"),
-                    "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0")}
+                    "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0"),
+                    "working_days_per_week": Decimal("5"), "working_days_per_month": Decimal("22")}
         for name in ("volume", "current_fte", "avg_processing_time", "working_hours_per_day",
+                     "working_days_per_week", "working_days_per_month",
                      "contingency_percentage", "volume_variation_percentage", "time_variation_percentage",
                      "growth_rate_percentage", "aht_change_percentage"):
             value = getattr(self, name)
             if value in (None, "") and name in defaults:
                 value = defaults[name]
             setattr(self, name, to_decimal(value))
-        self.working_days_per_week = int(self.working_days_per_week)
-        self.working_days_per_month = int(self.working_days_per_month)
+        self.time_unit = self.time_unit or "MINUTES"
         self.run_monte_carlo = bool(self.run_monte_carlo) if self.run_monte_carlo is not None else True
         self.simulation_count = int(self.simulation_count) if self.simulation_count not in (None, "") else 10000
         self.simulation_seed = int(self.simulation_seed) if self.simulation_seed not in (None, "") else None
@@ -137,7 +173,6 @@ class ForecastInput:
 
     @property
     def has_growth(self) -> bool:
-        """True when a future projection is needed (volume growth and/or AHT change)."""
         return self.has_volume_growth or self.has_aht_change
 
 
@@ -157,6 +192,8 @@ class DeterministicResult:
     operational_fte_gap: Decimal
     utilization_percentage: Optional[Decimal]
     unused_capacity_percentage: Optional[Decimal]
+    breakeven_aht_minutes: Optional[Decimal]
+    aht_headroom_percentage: Optional[Decimal]
     extra: dict = field(default_factory=dict)
 
 
@@ -173,6 +210,9 @@ def calculate_deterministic(inp: ForecastInput) -> DeterministicResult:
     recommended = ceil_decimal(required_fte)
     utilization = safe_divide(required_fte * HUNDRED, inp.current_fte, default=None)
     unused = (HUNDRED - utilization) if utilization is not None else None
+    breakeven_aht = safe_divide(available_capacity, daily_volume, default=None)
+    aht_headroom = (safe_divide((breakeven_aht - time_minutes) * HUNDRED, time_minutes, default=None)
+                    if breakeven_aht is not None else None)
 
     return DeterministicResult(
         daily_volume=q(daily_volume, "0.0001"),
@@ -189,5 +229,7 @@ def calculate_deterministic(inp: ForecastInput) -> DeterministicResult:
         operational_fte_gap=q(inp.current_fte - recommended),
         utilization_percentage=q(utilization) if utilization is not None else None,
         unused_capacity_percentage=q(unused) if unused is not None else None,
+        breakeven_aht_minutes=q(breakeven_aht, "0.0001") if breakeven_aht is not None else None,
+        aht_headroom_percentage=q(aht_headroom) if aht_headroom is not None else None,
         extra={"required_fte_raw": required_fte},
     )

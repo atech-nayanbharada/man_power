@@ -1,0 +1,17 @@
+<div class="card shadow-sm border-0 mb-4" id="calculation">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-calculator text-primary"></i> How the numbers are calculated</div>
+  {% if f.aht_is_calculated %}
+  <div class="alert alert-warning rounded-0 border-0 border-bottom mb-0 small d-flex gap-2"><i class="bi bi-exclamation-triangle-fill"></i>
+    <div><strong>AHT was calculated with the Calculate AHT button.</strong> It uses the team's full working hours (contingency not deducted), so utilization is 100% &divide; (1 &minus; contingency) ({{ f.utilization_percentage }}%) and the status is not a real measure.
+      {% if can_edit %}<a href="{% url 'forecasting:forecast_update' f.pk %}">Edit the forecast</a> and enter the measured AHT.{% endif %}</div></div>
+  {% endif %}
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0 calc-table">
+    <thead class="table-light"><tr><th class="calc-group">Area</th><th>Step</th><th>Calculation</th><th class="text-end">Result</th></tr></thead>
+    <tbody>{% for s in calc_steps %}
+      <tr class="{% if s.group %}calc-group-start{% endif %}{% if s.key %} calc-key{% endif %}{% if s.warn %} calc-warn{% endif %}">
+        <td class="calc-group small text-uppercase fw-semibold text-muted">{{ s.group }}</td><td>{{ s.label }}</td>
+        <td class="font-monospace small">{{ s.formula }}</td><td class="text-end fw-semibold text-nowrap">{{ s.result }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <div class="card-footer bg-white small text-muted">Calculate AHT = Current FTE &times; hours per day &times; working days &times; 60 &divide; volume (contingency not deducted). Contingency is applied when Required FTE is calculated. Required FTE is shown in whole people; Current FTE as entered.</div>
+</div>

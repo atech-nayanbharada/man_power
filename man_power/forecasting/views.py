@@ -19,12 +19,15 @@ from .permissions import ROLE_ADMIN, ROLE_ANALYST, ROLE_APPROVER, RoleRequiredMi
 from .services import excel_service
 from .services.dashboard_service import build_dashboard
 from .services.executive_service import build_executive, exec_config
+from .services.explain import calculation_steps
 from .services.forecast_service import build_input, log_action, save_forecast, serialize_forecast
 from .services.scenario_service import compare_scenarios
 
 logger = logging.getLogger(__name__)
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 UPLOAD_ERRORS_SESSION_KEY = "bulk_upload_errors"
+CALCULATED_AHT_MESSAGE = ("AHT was calculated from the team's full working hours ({hours} h, contingency not "
+                          "deducted), so the status is not a real measure. Edit the forecast and enter the measured AHT.")
 
 
 def xlsx_response(content, filename):
@@ -51,17 +54,13 @@ def projection_chart_data(forecast):
         return None
     return {
         "labels": [p["label"] for p in points],
-        "required": [p["required_fte"] for p in points],
-        "operational": [p["operational_fte"] for p in points],
-        "p90": [p["p90_fte"] for p in points] if forecast.run_monte_carlo else None,
+        "required": [p.get("required_people", p["operational_fte"]) for p in points],
         "needed": [p["fte_needed"] for p in points],
         "current": [float(forecast.current_fte)] * len(points),
         "status": [p["status"] for p in points],
         "utilization": [p["utilization"] for p in points],
-        "sufficiency": [p["sufficiency"] for p in points] if forecast.run_monte_carlo else None,
         "aht": [p.get("aht_minutes") for p in points],
-        "has_aht_change": forecast.has_aht_change,
-        "shortfall_index": forecast.projected_shortfall_month,
+        "sufficiency": [p["sufficiency"] for p in points] if forecast.run_monte_carlo else None,
     }
 
 
@@ -70,38 +69,30 @@ def forecast_context(user, forecast):
     chart = {}
     if s:
         chart.update({
-            "histogram": s.histogram_data,
-            "current_fte": float(forecast.current_fte),
-            "percentiles": {
-                "labels": ["Calculated", "P50", "P80", "P90", "P95", "P99"],
-                "values": [float(forecast.required_fte)] + [
-                    round(float(getattr(s, f"p{p}_required_fte")), 2) for p in (50, 80, 90, 95, 99)],
-            },
+            "histogram": s.histogram_data, "current_fte": float(forecast.current_fte),
+            "percentiles": {"labels": ["Calculated", "P50", "P80", "P90", "P95", "P99"],
+                            "values": [float(forecast.required_fte)] + [
+                                round(float(getattr(s, f"p{p}_required_fte")), 2) for p in (50, 80, 90, 95, 99)]},
         })
     projection = projection_chart_data(forecast)
     if projection:
         chart["projection"] = projection
     return {
-        "f": forecast,
-        "summary": s,
-        "chart_data": chart,
+        "f": forecast, "summary": s, "chart_data": chart, "calc_steps": calculation_steps(forecast),
         "can_edit": perms.can_edit_forecast(user, forecast),
         "can_delete": perms.can_delete_forecast(user, forecast),
         "can_approve": perms.can_approve_forecast(user, forecast),
-        "is_maker": forecast.created_by_id == user.id,
-        "approval_form": ApprovalForm(),
+        "is_maker": forecast.created_by_id == user.id, "approval_form": ApprovalForm(),
     }
 
 
-# ============================================================ Dashboards
 class DashboardView(RoleRequiredMixin, TemplateView):
     template_name = "forecasting/dashboard.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         filter_form = ForecastFilterForm(self.request.GET or None)
-        qs = perms.visible_forecasts(self.request.user, ManpowerForecast.objects.all())
-        qs = filter_form.apply(qs)
+        qs = filter_form.apply(perms.visible_forecasts(self.request.user, ManpowerForecast.objects.all()))
         ctx.update(build_dashboard(qs))
         ctx["filter_form"] = filter_form
         ctx["pending_count"] = (ManpowerForecast.objects.filter(approval_status=ApprovalStatus.PENDING)
@@ -111,7 +102,6 @@ class DashboardView(RoleRequiredMixin, TemplateView):
 
 
 def executive_data(request):
-    """Shared by the executive page and its Excel export."""
     defaults = exec_config()
     form = ExecutiveFilterForm(request.GET or None, initial={"horizon": defaults["horizon"],
                                                               "cost_per_fte": defaults["cost_per_fte"]})
@@ -128,15 +118,13 @@ def executive_data(request):
 
 
 class ExecutiveDashboardView(RoleRequiredMixin, View):
-    """CEO-level summary: health score, hiring need and budget, risks, redeployment and outlook."""
     template_name = "forecasting/executive.html"
 
     def get(self, request):
         form, data, filters_text = executive_data(request)
         return render(request, self.template_name, {
             "form": form, "filters_text": filters_text, "export_query": request.GET.urlencode(),
-            "today": timezone.localdate(), **data,
-        })
+            "today": timezone.localdate(), **data})
 
 
 class ExecutiveExportView(RoleRequiredMixin, View):
@@ -147,8 +135,26 @@ class ExecutiveExportView(RoleRequiredMixin, View):
                              f"executive_workforce_summary_{stamp}.xlsx")
 
 
-# ============================================================ Forecast CRUD
-class ForecastCreateView(RoleRequiredMixin, CreateView):
+class ForecastSaveMixin:
+    action = ForecastAuditLog.Action.CREATE
+
+    def form_valid(self, form):
+        forecast = form.save(commit=False)
+        try:
+            save_forecast(forecast, self.request.user, self.action)
+        except Exception as exc:
+            logger.exception("Forecast calculation failed")
+            form.add_error(None, f"Calculation failed: {exc}")
+            return self.form_invalid(form)
+        self.object = forecast
+        messages.success(self.request, self.success_text(forecast)
+                         + f" AHT used: {forecast.avg_processing_time:.2f} min per item.")
+        if forecast.aht_is_calculated:
+            messages.warning(self.request, CALCULATED_AHT_MESSAGE.format(hours=f"{forecast.total_time_spent_hours:,.2f}"))
+        return redirect("forecasting:forecast_result", pk=forecast.pk)
+
+
+class ForecastCreateView(RoleRequiredMixin, ForecastSaveMixin, CreateView):
     allowed_roles = (ROLE_ADMIN, ROLE_ANALYST)
     model = ManpowerForecast
     form_class = ManpowerForecastForm
@@ -160,24 +166,14 @@ class ForecastCreateView(RoleRequiredMixin, CreateView):
         if process_id and process_id.isdigit():
             process = ProcessMaster.objects.filter(pk=process_id, is_active=True).first()
             if process:
-                initial.update(function=process.function_id, process=process.pk,
-                               frequency=process.default_frequency)
+                initial.update(function=process.function_id, process=process.pk, frequency=process.default_frequency)
         return initial
 
-    def form_valid(self, form):
-        forecast = form.save(commit=False)
-        try:
-            save_forecast(forecast, self.request.user, ForecastAuditLog.Action.CREATE)
-        except Exception as exc:
-            logger.exception("Forecast calculation failed")
-            form.add_error(None, f"Calculation failed: {exc}")
-            return self.form_invalid(form)
-        self.object = forecast
+    def success_text(self, forecast):
         method = "calculated and simulated" if forecast.run_monte_carlo else "calculated (deterministic only)"
         if forecast.has_projection:
             method += f" with a {forecast.forecast_horizon_months}-month projection ({forecast.growth_drivers_text})"
-        messages.success(self.request, f"Forecast #{forecast.pk} {method} and submitted for approval.")
-        return redirect("forecasting:forecast_result", pk=forecast.pk)
+        return f"Forecast #{forecast.pk} {method} and submitted for approval."
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -185,11 +181,12 @@ class ForecastCreateView(RoleRequiredMixin, CreateView):
         return ctx
 
 
-class ForecastUpdateView(RoleRequiredMixin, UpdateView):
+class ForecastUpdateView(RoleRequiredMixin, ForecastSaveMixin, UpdateView):
     allowed_roles = (ROLE_ADMIN, ROLE_ANALYST)
     model = ManpowerForecast
     form_class = ManpowerForecastForm
     template_name = "forecasting/forecast_form.html"
+    action = ForecastAuditLog.Action.UPDATE
 
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
@@ -197,16 +194,8 @@ class ForecastUpdateView(RoleRequiredMixin, UpdateView):
             raise PermissionDenied("You can only edit forecasts you created.")
         return obj
 
-    def form_valid(self, form):
-        forecast = form.save(commit=False)
-        try:
-            save_forecast(forecast, self.request.user, ForecastAuditLog.Action.UPDATE)
-        except Exception as exc:
-            logger.exception("Forecast recalculation failed")
-            form.add_error(None, f"Calculation failed: {exc}")
-            return self.form_invalid(form)
-        messages.success(self.request, f"Forecast #{forecast.pk} updated, recalculated and resubmitted for approval.")
-        return redirect("forecasting:forecast_result", pk=forecast.pk)
+    def success_text(self, forecast):
+        return f"Forecast #{forecast.pk} updated, recalculated and resubmitted for approval."
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -218,8 +207,7 @@ class ForecastResultView(RoleRequiredMixin, View):
     template_name = "forecasting/forecast_result.html"
 
     def get(self, request, pk):
-        forecast = get_visible_forecast(request.user, pk)
-        return render(request, self.template_name, forecast_context(request.user, forecast))
+        return render(request, self.template_name, forecast_context(request.user, get_visible_forecast(request.user, pk)))
 
 
 class ForecastDetailView(RoleRequiredMixin, View):
@@ -240,8 +228,7 @@ class ForecastListView(RoleRequiredMixin, ListView):
 
     def get_queryset(self):
         self.filter_form = ForecastFilterForm(self.request.GET or None)
-        qs = perms.visible_forecasts(self.request.user, forecast_base_qs())
-        return self.filter_form.apply(qs)
+        return self.filter_form.apply(perms.visible_forecasts(self.request.user, forecast_base_qs()))
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -267,11 +254,6 @@ class ForecastDeleteView(RoleRequiredMixin, View):
 
 
 class ForecastRerunView(RoleRequiredMixin, View):
-    """
-    Recalculate a forecast (including the projection). Optional query parameter:
-      ?monte_carlo=on  -> switch Monte Carlo on and run it
-      ?monte_carlo=off -> switch Monte Carlo off (deterministic only)
-    """
     allowed_roles = (ROLE_ADMIN, ROLE_ANALYST)
 
     def post(self, request, pk):
@@ -283,15 +265,13 @@ class ForecastRerunView(RoleRequiredMixin, View):
             forecast.run_monte_carlo = switch == "on"
         save_forecast(forecast, request.user,
                       ForecastAuditLog.Action.SIMULATE if forecast.run_monte_carlo else ForecastAuditLog.Action.UPDATE)
-        if forecast.run_monte_carlo:
-            messages.success(request, "Monte Carlo simulation completed. Forecast resubmitted for approval.")
-        else:
-            messages.success(request, "Forecast recalculated (deterministic only). Resubmitted for approval.")
+        messages.success(request, "Monte Carlo simulation completed. Forecast resubmitted for approval."
+                         if forecast.run_monte_carlo else
+                         "Forecast recalculated (deterministic only). Resubmitted for approval.")
         return redirect("forecasting:forecast_result", pk=pk)
 
 
 class ForecastApprovalView(RoleRequiredMixin, View):
-    """Maker-checker approval. The creator can never approve their own forecast."""
     allowed_roles = (ROLE_ADMIN, ROLE_APPROVER)
 
     def post(self, request, pk):
@@ -314,8 +294,7 @@ class ForecastApprovalView(RoleRequiredMixin, View):
         forecast.approved_by = request.user
         forecast.approved_at = timezone.now()
         forecast.approval_comments = form.cleaned_data["comments"]
-        forecast.save(update_fields=["approval_status", "approved_by", "approved_at", "approval_comments",
-                                     "updated_at"])
+        forecast.save(update_fields=["approval_status", "approved_by", "approved_at", "approval_comments", "updated_at"])
         log_action(forecast, ForecastAuditLog.Action.APPROVE if approve else ForecastAuditLog.Action.REJECT,
                    request.user, old, serialize_forecast(forecast))
         messages.success(request, f"Forecast #{pk} {'approved' if approve else 'rejected'}.")
@@ -323,8 +302,6 @@ class ForecastApprovalView(RoleRequiredMixin, View):
 
 
 class ProcessOptionsView(RoleRequiredMixin, View):
-    """AJAX: active processes for a function (dependent dropdown)."""
-
     def get(self, request):
         function_id = request.GET.get("function", "")
         if not function_id.isdigit():
@@ -334,7 +311,6 @@ class ProcessOptionsView(RoleRequiredMixin, View):
             {"id": p.pk, "name": p.process_name, "default_frequency": p.default_frequency} for p in processes]})
 
 
-# ============================================================ Masters
 class FunctionListView(RoleRequiredMixin, ListView):
     allowed_roles = (ROLE_ADMIN,)
     template_name = "forecasting/function_list.html"
@@ -342,8 +318,7 @@ class FunctionListView(RoleRequiredMixin, ListView):
     paginate_by = 15
 
     def get_queryset(self):
-        qs = FunctionMaster.objects.annotate(process_count=Count("processes", distinct=True)).select_related(
-            "created_by")
+        qs = FunctionMaster.objects.annotate(process_count=Count("processes", distinct=True)).select_related("created_by")
         search = self.request.GET.get("q", "").strip()
         if search:
             qs = qs.filter(Q(function_name__icontains=search) | Q(function_owner__icontains=search))
@@ -384,8 +359,7 @@ class ProcessListView(RoleRequiredMixin, ListView):
     paginate_by = 15
 
     def get_queryset(self):
-        qs = ProcessMaster.objects.select_related("function", "created_by").annotate(
-            forecast_count=Count("forecasts"))
+        qs = ProcessMaster.objects.select_related("function", "created_by").annotate(forecast_count=Count("forecasts"))
         search = self.request.GET.get("q", "").strip()
         function_id = self.request.GET.get("function", "")
         if search:
@@ -428,7 +402,6 @@ class ProcessUpdateView(RoleRequiredMixin, UpdateView):
         return super().form_valid(form)
 
 
-# ============================================================ Scenario comparison
 class ScenarioComparisonView(RoleRequiredMixin, View):
     allowed_roles = (ROLE_ADMIN, ROLE_ANALYST, ROLE_APPROVER)
     template_name = "forecasting/scenario.html"
@@ -448,9 +421,8 @@ class ScenarioComparisonView(RoleRequiredMixin, View):
                 for sc in DEFAULT_SCENARIOS:
                     item = dict(sc)
                     if "current_fte" in item:
-                        item["current_fte"] = (base.recommended_operational_fte
-                                               if base.current_fte < base.recommended_operational_fte
-                                               else base.current_fte + 1)
+                        current = base.current_fte
+                        item["current_fte"] = base.required_people if current < base.required_people else current + 1
                     initial_scenarios.append(item)
         else:
             initial_scenarios = [dict(sc) for sc in DEFAULT_SCENARIOS if "current_fte" not in sc]
@@ -482,16 +454,13 @@ class ScenarioComparisonView(RoleRequiredMixin, View):
             mc = rows[0]["monte_carlo"]
             chart = {
                 "labels": [r["name"] for r in rows],
-                "required": [float(r["required_fte"]) for r in rows],
-                "operational": [float(r["operational_fte"]) for r in rows],
-                "p90": [float(r["p90_fte"]) for r in rows] if mc else None,
+                "required": [r["required_people"] for r in rows],
+                "p90": [r["risk_adjusted_fte"] for r in rows] if mc else None,
                 "current": [float(r["current_fte"]) for r in rows],
                 "sufficiency": [float(r["sufficiency_probability"]) for r in rows] if mc else None,
                 "utilization": [float(r["utilization"]) if r["utilization"] is not None else None for r in rows],
-                "horizon_required": [float(r["horizon_required_fte"]) if r["has_projection"] else None
-                                     for r in rows],
-                "has_monte_carlo": mc,
-                "has_projection": any(r["has_projection"] for r in rows),
+                "horizon_required": [float(r["horizon_fte_needed"]) if r["has_projection"] else None for r in rows],
+                "has_monte_carlo": mc, "has_projection": any(r["has_projection"] for r in rows),
             }
         return render(request, self.template_name, {
             "base_form": base_form, "formset": formset, "rows": rows, "chart_data": chart,
@@ -500,7 +469,6 @@ class ScenarioComparisonView(RoleRequiredMixin, View):
         })
 
 
-# ============================================================ Excel
 class BulkUploadView(RoleRequiredMixin, View):
     allowed_roles = (ROLE_ADMIN, ROLE_ANALYST)
     template_name = "forecasting/bulk_upload.html"
@@ -522,6 +490,10 @@ class BulkUploadView(RoleRequiredMixin, View):
             ctx["created"] = forecast_base_qs().filter(pk__in=result.created_ids)
             if result.success_count:
                 messages.success(request, f"{result.success_count} of {result.total_rows} rows processed successfully.")
+            if result.auto_filled_rows:
+                rows = ", ".join(str(r) for r in result.auto_filled_rows)
+                messages.warning(request, f"AHT was blank and was calculated from team working hours for row(s) "
+                                          f"{rows}. Their status is not a real measure until measured AHT is entered.")
             if result.error_count:
                 messages.warning(request, f"{result.error_count} rows failed validation. Download the error report.")
         return render(request, self.template_name, ctx)
@@ -552,10 +524,8 @@ class ReportView(RoleRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         filter_form = ForecastFilterForm(self.request.GET or None)
         qs = filter_form.apply(perms.visible_forecasts(self.request.user, forecast_base_qs()))
-        ctx["filter_form"] = filter_form
-        ctx["record_count"] = qs.count()
-        ctx["preview"] = qs[:10]
-        ctx["query_string"] = self.request.GET.urlencode()
+        ctx.update(filter_form=filter_form, record_count=qs.count(), preview=qs[:10],
+                   query_string=self.request.GET.urlencode())
         return ctx
 
 

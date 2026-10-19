@@ -1,6 +1,11 @@
 """
-Orchestration: deterministic calculation + optional Monte Carlo + status classification
-+ optional growth projection (volume and/or AHT), persisted with a simulation summary and an audit log.
+Orchestration: AHT (entered or calculated) + deterministic calculation + optional Monte Carlo
++ status classification + optional growth projection, persisted with a simulation summary and audit log.
+
+AHT sources (priority order):
+  1. AHT entered on the form, or filled by the "Calculate AHT" button
+  2. Total time spent (bulk upload / legacy rows): AHT = total hours x 60 / volume
+  3. Team working time (same as the button): AHT = FTE x hours/day x working days x 60 / volume
 """
 import secrets
 from dataclasses import dataclass, replace
@@ -12,7 +17,8 @@ from django.forms.models import model_to_dict
 from django.utils import timezone
 
 from ..models import ApprovalStatus, ForecastAuditLog, ForecastSimulationSummary, ManpowerForecast
-from .calculations import DeterministicResult, ForecastInput, calculate_deterministic, q
+from .calculations import (DeterministicResult, ForecastInput, aht_from_total_time, available_time_in_period,
+                           calculate_deterministic, q, to_decimal)
 from .monte_carlo import MonteCarloResult, run_monte_carlo
 from .projection import ProjectionResult, run_projection
 from .status import StatusResult, classify_status
@@ -28,6 +34,7 @@ RESULT_FIELDS = (
     "daily_volume", "processing_time_minutes", "productive_minutes_per_fte", "workload_minutes",
     "workload_hours", "available_capacity_minutes", "required_fte", "recommended_operational_fte",
     "fte_gap", "operational_fte_gap", "utilization_percentage", "unused_capacity_percentage",
+    "breakeven_aht_minutes", "aht_headroom_percentage",
 )
 
 
@@ -39,6 +46,31 @@ class ForecastComputation:
     status: StatusResult
 
 
+def capacity_aht(current_fte, working_hours_per_day, contingency_percentage, frequency,
+                 working_days_per_week, working_days_per_month, volume) -> Optional[Decimal]:
+    """AHT from team working time - the same formula as the Calculate AHT button."""
+    hours = available_time_in_period(current_fte, working_hours_per_day, contingency_percentage, frequency,
+                                     working_days_per_week, working_days_per_month)
+    return aht_from_total_time(hours, volume) if hours else None
+
+
+def derive_aht(forecast):
+    """Make sure the forecast has an AHT (minutes) and keep total time spent in line with it."""
+    aht = to_decimal(forecast.avg_processing_time)
+    if aht <= 0:
+        aht = aht_from_total_time(forecast.total_time_spent_hours, forecast.volume)
+    if aht is None or aht <= 0:
+        aht = capacity_aht(forecast.current_fte, forecast.working_hours_per_day, forecast.contingency_percentage,
+                           forecast.frequency, forecast.working_days_per_week, forecast.working_days_per_month,
+                           forecast.volume)
+    if aht is None or aht <= 0:
+        raise ValueError("AHT cannot be calculated when Current FTE is 0. Enter the measured AHT per item.")
+    forecast.avg_processing_time = q(aht, "0.0001")
+    forecast.time_unit = "MINUTES"
+    forecast.total_time_spent_hours = q(forecast.avg_processing_time * to_decimal(forecast.volume) / 60, "0.0001")
+    return forecast.avg_processing_time
+
+
 def build_input(data) -> ForecastInput:
     if isinstance(data, dict):
         return ForecastInput(**{k: data.get(k) for k in INPUT_FIELDS})
@@ -46,10 +78,6 @@ def build_input(data) -> ForecastInput:
 
 
 def with_effective_seed(inp: ForecastInput) -> ForecastInput:
-    """
-    Use one seed for the current result and every projected month so the projection curve is
-    consistent with today's result. A random seed is drawn when the user did not set one.
-    """
     if not inp.run_monte_carlo or inp.simulation_seed is not None:
         return inp
     return replace(inp, simulation_seed=secrets.randbelow(2 ** 32))
@@ -60,14 +88,10 @@ def compute_forecast(inp: ForecastInput) -> ForecastComputation:
     mc = None
     if inp.run_monte_carlo:
         mc = run_monte_carlo(
-            daily_volume=det.daily_volume,
-            processing_time_minutes=det.processing_time_minutes,
-            productive_minutes_per_fte=det.productive_minutes_per_fte,
-            current_fte=inp.current_fte,
-            volume_variation_pct=inp.volume_variation_percentage,
-            time_variation_pct=inp.time_variation_percentage,
-            simulation_count=inp.simulation_count,
-            seed=inp.simulation_seed,
+            daily_volume=det.daily_volume, processing_time_minutes=det.processing_time_minutes,
+            productive_minutes_per_fte=det.productive_minutes_per_fte, current_fte=inp.current_fte,
+            volume_variation_pct=inp.volume_variation_percentage, time_variation_pct=inp.time_variation_percentage,
+            simulation_count=inp.simulation_count, seed=inp.simulation_seed,
         )
     status = classify_status(
         inp.current_fte, det.required_fte, det.utilization_percentage,
@@ -78,7 +102,6 @@ def compute_forecast(inp: ForecastInput) -> ForecastComputation:
 
 
 def compute_projection(inp: ForecastInput, start_date=None) -> Optional[ProjectionResult]:
-    """Projection, or None when neither volume growth nor AHT change is entered."""
     if not inp.has_growth:
         return None
     return run_projection(inp, compute_forecast, start_date or timezone.localdate())
@@ -124,27 +147,23 @@ def _save_summary(forecast, mc):
 
     return ForecastSimulationSummary.objects.create(
         forecast=forecast,
-        average_required_fte=d(mc.average_required_fte),
-        minimum_required_fte=d(mc.minimum_required_fte),
-        maximum_required_fte=d(mc.maximum_required_fte),
-        standard_deviation=d(mc.standard_deviation),
-        p50_required_fte=d(mc.p50_required_fte),
-        p80_required_fte=d(mc.p80_required_fte),
-        p90_required_fte=d(mc.p90_required_fte),
-        p95_required_fte=d(mc.p95_required_fte),
+        average_required_fte=d(mc.average_required_fte), minimum_required_fte=d(mc.minimum_required_fte),
+        maximum_required_fte=d(mc.maximum_required_fte), standard_deviation=d(mc.standard_deviation),
+        p50_required_fte=d(mc.p50_required_fte), p80_required_fte=d(mc.p80_required_fte),
+        p90_required_fte=d(mc.p90_required_fte), p95_required_fte=d(mc.p95_required_fte),
         p99_required_fte=d(mc.p99_required_fte),
         risk_adjusted_recommended_fte=Decimal(mc.risk_adjusted_recommended_fte),
         sufficiency_probability=d(mc.sufficiency_probability, "0.01"),
         failure_probability=d(mc.failure_probability, "0.01"),
-        simulation_count=mc.simulation_count,
-        histogram_data=mc.histogram,
+        simulation_count=mc.simulation_count, histogram_data=mc.histogram,
     )
 
 
 @transaction.atomic
 def save_forecast(forecast: ManpowerForecast, user, action=ForecastAuditLog.Action.CREATE) -> ManpowerForecast:
-    """Compute and persist. Any change resets approval to Pending so maker-checker restarts."""
+    """Derive AHT, compute and persist. Any change resets approval to Pending."""
     old_data = serialize_forecast(ManpowerForecast.objects.get(pk=forecast.pk)) if forecast.pk else None
+    derive_aht(forecast)
     inp = with_effective_seed(build_input(forecast))
     comp = compute_forecast(inp)
     _apply_results(forecast, comp)

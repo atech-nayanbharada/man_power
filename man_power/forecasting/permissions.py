@@ -58,7 +58,6 @@ def can_review(user):
 
 
 def only_approved_visible(user):
-    """Users whose only role is Viewer see approved forecasts only."""
     roles = get_roles(user)
     return not roles or roles == {ROLE_VIEWER}
 
@@ -91,15 +90,11 @@ def can_delete_forecast(user, forecast):
 
 
 def can_approve_forecast(user, forecast):
-    """Maker-checker: reviewer role required, and a maker can never approve their own forecast."""
-    return (can_review(user)
-            and forecast.created_by_id != user.id
+    return (can_review(user) and forecast.created_by_id != user.id
             and forecast.approval_status == ApprovalStatus.PENDING)
 
 
 class RoleRequiredMixin(AccessMixin):
-    """Restrict a class-based view to users holding at least one of `allowed_roles`."""
-
     allowed_roles = ALL_ROLES
 
     def dispatch(self, request, *args, **kwargs):

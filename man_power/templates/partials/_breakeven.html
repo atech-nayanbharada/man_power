@@ -1,0 +1,19 @@
+{% load forecast_tags %}
+<div class="card shadow-sm border-0 mb-4">
+  <div class="card-header bg-white fw-semibold"><i class="bi bi-stopwatch text-primary"></i> AHT &amp; Break-even</div>
+  <div class="card-body"><div class="row g-3 align-items-center">
+    <div class="col-6 col-lg-2"><div class="kpi-card {% if f.aht_is_calculated %}kpi-amber{% else %}kpi-blue{% endif %}"><div class="kpi-label">AHT</div>
+      <div class="kpi-value">{{ f.processing_time_minutes|num }} <small class="kpi-unit">min</small></div>
+      <div class="kpi-note">{% if f.aht_is_calculated %}Calculated{% else %}Entered{% endif %}</div></div></div>
+    <div class="col-6 col-lg-2"><div class="kpi-card kpi-teal"><div class="kpi-label">Break-even AHT</div>
+      <div class="kpi-value">{% if f.breakeven_aht_minutes is not None %}{{ f.breakeven_aht_minutes|num }} <small class="kpi-unit">min</small>{% else %}N/A{% endif %}</div></div></div>
+    <div class="col-6 col-lg-2"><div class="kpi-card {% if f.aht_headroom_percentage is None %}kpi-gray{% elif f.aht_headroom_percentage < 0 %}kpi-red{% elif f.aht_headroom_percentage < 10 %}kpi-amber{% else %}kpi-green{% endif %}"><div class="kpi-label">AHT Headroom</div>
+      <div class="kpi-value text-nowrap {{ f.aht_headroom_css }}">{% if f.aht_headroom_percentage is not None %}{{ f.aht_headroom_percentage|signed }}%{% else %}N/A{% endif %}</div></div></div>
+    <div class="col-12 col-lg-6 small">
+      {% if f.aht_headroom_percentage is None %}Break-even AHT cannot be calculated because there is no volume.
+      {% elif f.aht_headroom_percentage >= 0 %}Your current <strong>{{ f.current_fte|fte_dec }} FTE</strong> can handle today's volume as long as the average time per item stays at or below <strong>{{ f.breakeven_aht_minutes|num }} minutes</strong>.
+      {% else %}At today's volume, the average time per item must fall to <strong>{{ f.breakeven_aht_minutes|num }} minutes</strong>, or more FTE is needed.{% endif %}
+      <div class="text-muted mt-1">Break-even AHT = current FTE &times; productive minutes &divide; daily volume.</div>
+    </div>
+  </div></div>
+</div>

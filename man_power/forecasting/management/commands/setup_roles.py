@@ -5,16 +5,13 @@ from django.core.management.base import BaseCommand
 from forecasting.permissions import ROLE_ADMIN, ROLE_ANALYST, ROLE_APPROVER, ROLE_VIEWER
 
 APP_MODELS = ["functionmaster", "processmaster", "manpowerforecast", "forecastsimulationsummary", "forecastauditlog"]
-
 ROLE_PERMISSIONS = {
     ROLE_ADMIN: {"forecasting": [f"{a}_{m}" for m in APP_MODELS for a in ("add", "change", "delete", "view")],
                  "auth": [f"{a}_{m}" for m in ("user", "group") for a in ("add", "change", "delete", "view")]},
     ROLE_ANALYST: {"forecasting": ["add_manpowerforecast", "change_manpowerforecast", "view_manpowerforecast",
-                                   "view_functionmaster", "view_processmaster",
-                                   "view_forecastsimulationsummary"]},
+                                   "view_functionmaster", "view_processmaster", "view_forecastsimulationsummary"]},
     ROLE_APPROVER: {"forecasting": ["view_manpowerforecast", "change_manpowerforecast", "view_functionmaster",
-                                    "view_processmaster", "view_forecastsimulationsummary",
-                                    "view_forecastauditlog"]},
+                                    "view_processmaster", "view_forecastsimulationsummary", "view_forecastauditlog"]},
     ROLE_VIEWER: {"forecasting": ["view_manpowerforecast", "view_forecastsimulationsummary"]},
 }
 

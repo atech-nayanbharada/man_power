@@ -54,7 +54,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "manpower_forecasting.wsgi.application"
 
-# SQLite for development; set DB_ENGINE=postgresql (and DB_* variables) for PostgreSQL.
 if os.environ.get("DB_ENGINE", "sqlite") == "postgresql":
     DATABASES = {
         "default": {
@@ -104,15 +103,15 @@ FORECASTING = {
     "SIMULATION_MIN": 1000,
     "SIMULATION_MAX": 100000,
     "SCENARIO_MAX": 4,
-    "MONTE_CARLO_DEFAULT": True,   # default state of the "Run Monte Carlo" switch
-    "HORIZON_DEFAULT": 12,         # default growth projection horizon (months)
-    "HORIZON_MAX": 60,             # maximum growth projection horizon (months)
-    "GROWTH_MAX_FACTOR": 1000,     # max workload multiplier (volume x AHT) allowed at the end of the horizon
+    "MONTE_CARLO_DEFAULT": True,
+    "HORIZON_DEFAULT": 12,
+    "HORIZON_MAX": 60,
+    "GROWTH_MAX_FACTOR": 1000,
     # ---- Executive dashboard ----
-    "EXEC_COST_PER_FTE": 600000,   # default fully loaded annual cost per FTE (editable on the page)
-    "EXEC_CURRENCY": "₹",          # currency symbol shown on the executive dashboard
-    "EXEC_HORIZON_MONTHS": 12,     # outlook window for the executive headcount trajectory
-    "EXEC_TARGET_UTILIZATION": 80, # organisation-level target utilization (%)
+    "EXEC_COST_PER_FTE": 600000,
+    "EXEC_CURRENCY": "₹",
+    "EXEC_HORIZON_MONTHS": 12,
+    "EXEC_TARGET_UTILIZATION": 80,
 }
 
 if not DEBUG:

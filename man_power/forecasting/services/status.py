@@ -3,20 +3,19 @@ Manpower status classification, recommendation and explanation.
 
 Rule precedence (first match wins):
   1. Current FTE = 0                                    -> Less Manpower
-  2. Current FTE < Required FTE                         -> Less Manpower
+  2. Current FTE < Required FTE (exact workload)        -> Less Manpower
   3. MC sufficiency probability < 80%  (only if MC ran) -> Less Manpower
   4. Utilization < 70%                                  -> Higher Manpower
-  5. Otherwise                                          -> Sufficient Manpower
-     (+ High Utilization Risk flag when utilization > 90%)
+  5. Otherwise                                          -> Sufficient Manpower (+ High Utilization Risk > 90%)
 
-When Monte Carlo is switched off, `sufficiency_probability` is None and rule 3 is skipped.
+Current FTE is shown as entered (e.g. 2.5 FTE); required headcount is shown in whole people (rounded up).
 """
 from dataclasses import dataclass
 from decimal import Decimal
 
 from django.conf import settings
 
-from .calculations import ceil_decimal, q, to_decimal
+from .calculations import ceil_decimal, fmt, q, to_decimal
 
 HIGH_UTILIZATION_WARNING = (
     "Current manpower may be sufficient under normal conditions, but the process has a high utilization risk."
@@ -31,6 +30,10 @@ def _thresholds():
     return (Decimal(str(cfg.get("SUFFICIENCY_THRESHOLD", 80))),
             Decimal(str(cfg.get("UTILIZATION_LOWER", 70))),
             Decimal(str(cfg.get("UTILIZATION_UPPER", 90))))
+
+
+def people(value) -> str:
+    return f"{int(ceil_decimal(value))} FTE"
 
 
 @dataclass
@@ -48,34 +51,37 @@ def classify_status(current_fte, required_fte, utilization, sufficiency_probabil
     current, required = to_decimal(current_fte), to_decimal(required_fte)
     mc_ran = sufficiency_probability is not None
     prob = to_decimal(sufficiency_probability) if mc_ran else None
-    operational = ceil_decimal(required)
+    needed = ceil_decimal(required)
     p90_ceiling = ceil_decimal(p90_fte) if (mc_ran and p90_fte is not None) else None
+    current_txt = f"{fmt(current)} FTE"
     util_text = f"{q(utilization)}%" if utilization is not None else "not applicable"
     mc_suffix = "" if mc_ran else f" {MC_NOT_RUN_NOTE}"
 
     if current == 0:
-        target = (f"deploy at least {operational} FTE (risk-adjusted P90 requirement: {p90_ceiling} FTE)."
-                  if mc_ran else f"deploy at least {operational} FTE.")
+        target = (f"deploy at least {people(needed)} ({people(p90_ceiling)} to cover 90% of simulated days)."
+                  if mc_ran else f"deploy at least {people(needed)}.")
         return StatusResult(
             "LESS", False,
             f"Additional manpower is required to manage the forecasted workload. No FTE is currently allocated; {target}",
-            f"Current FTE is 0 while the workload requires {q(required)} FTE, so no capacity is available "
+            f"Current FTE is 0 while the workload requires {people(needed)}, so no capacity is available "
             f"and utilization cannot be calculated.{mc_suffix}",
         )
 
     if current < required:
+        add = needed - current
         if mc_ran:
-            rec_tail = f"; plan for {p90_ceiling} FTE in total to cover 90% of simulated workload scenarios."
+            rec_tail = f" Plan for {people(p90_ceiling)} in total to cover 90% of simulated workload scenarios."
             exp_tail = (f" Utilization is {util_text}, and the Monte Carlo simulation shows only {q(prob)}% "
                         "probability that current manpower can handle the workload.")
         else:
-            rec_tail = f" (operational requirement: {operational} FTE)."
+            rec_tail = ""
             exp_tail = f" Utilization is {util_text}.{mc_suffix}"
         return StatusResult(
             "LESS", False,
-            "Additional manpower is required to manage the forecasted workload. "
-            f"Add {q(required - current)} FTE to meet the calculated requirement{rec_tail}",
-            f"Current FTE ({q(current)}) is lower than the calculated required FTE ({q(required)}).{exp_tail}",
+            f"Additional manpower is required to manage the forecasted workload. Add {fmt(add)} FTE "
+            f"(requirement: {people(needed)}).{rec_tail}",
+            f"Current FTE ({current_txt}) is lower than the workload of {fmt(required)} FTE "
+            f"({people(needed)} rounded up).{exp_tail}",
         )
 
     if mc_ran and prob < threshold:
@@ -83,22 +89,24 @@ def classify_status(current_fte, required_fte, utilization, sufficiency_probabil
         return StatusResult(
             "LESS", bool(warning),
             "Additional manpower is required to manage the forecasted workload. Although current FTE covers "
-            f"the average workload, increase staffing to {p90_ceiling} FTE (P90 risk-adjusted) to absorb "
-            "volume and processing-time variability.",
-            f"Current FTE ({q(current)}) covers the calculated requirement ({q(required)}) under average "
-            f"conditions, but the Monte Carlo sufficiency probability is {q(prob)}%, below the {q(threshold)}% "
-            f"threshold. Utilization is {util_text}.",
+            f"the average workload, increase staffing to {people(p90_ceiling)} (P90 risk-adjusted) to absorb "
+            "volume and AHT variability.",
+            f"Current FTE ({current_txt}) covers the average workload of {fmt(required)} FTE, but the Monte Carlo "
+            f"sufficiency probability is {q(prob)}%, below the {q(threshold)}% threshold. Utilization is {util_text}.",
             warning,
         )
 
     if utilization is not None and utilization < util_lower:
-        p90_text = f"; the risk-adjusted P90 requirement is {p90_ceiling} FTE" if mc_ran else ""
+        spare = current - needed
+        spare_text = (f"About {fmt(spare)} FTE can be reallocated" if spare >= 1
+                      else f"About {fmt(current - required)} FTE of capacity is unused")
+        p90_text = f"; the risk-adjusted P90 requirement is {people(p90_ceiling)}" if mc_ran else ""
         prob_text = f" Sufficiency probability is {q(prob)}%." if mc_ran else mc_suffix
         return StatusResult(
             "HIGHER", False,
             "Current manpower is higher than the forecasted requirement. Consider reallocating available capacity. "
-            f"Approximately {q(current - required)} FTE is unutilized{p90_text}.",
-            f"Current FTE ({q(current)}) exceeds the required FTE ({q(required)}) and utilization is {util_text}, "
+            f"{spare_text}{p90_text}.",
+            f"Current FTE ({current_txt}) exceeds the workload of {fmt(required)} FTE and utilization is {util_text}, "
             f"below the {q(util_lower)}% lower bound.{prob_text}",
         )
 
@@ -111,7 +119,7 @@ def classify_status(current_fte, required_fte, utilization, sufficiency_probabil
         "SUFFICIENT", high_risk,
         "Current manpower is sufficient for the expected workload."
         + (" Monitor closely because utilization is above the target band." if high_risk else ""),
-        f"Current FTE ({q(current)}) is equal to or higher than the required FTE ({q(required)}), utilization is "
+        f"Current FTE ({current_txt}) covers the workload of {fmt(required)} FTE, utilization is "
         f"{util_text}{band}{prob_text}",
         HIGH_UTILIZATION_WARNING if high_risk else "",
     )

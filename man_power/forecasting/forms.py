@@ -10,6 +10,7 @@ from django.urls import reverse
 
 from .models import (ApprovalStatus, Frequency, FunctionMaster, ManpowerForecast, ManpowerStatus,
                      ProcessMaster, TimeUnit)
+from .services.calculations import aht_from_total_time, available_time_in_period, convert_time_to_minutes
 from .services.projection import PERIOD_LABELS, growth_factor, max_growth_factor
 
 CFG = getattr(settings, "FORECASTING", {})
@@ -19,35 +20,42 @@ MC_DEFAULT = CFG.get("MONTE_CARLO_DEFAULT", True)
 HORIZON_DEFAULT = CFG.get("HORIZON_DEFAULT", 12)
 HORIZON_MAX = CFG.get("HORIZON_MAX", 60)
 
-# Monte Carlo-only fields and the defaults stored when Monte Carlo is switched off
 MC_FIELDS = ("volume_variation_percentage", "time_variation_percentage", "simulation_count", "simulation_seed")
 MC_DEFAULTS = {"volume_variation_percentage": Decimal("10"), "time_variation_percentage": Decimal("15"),
                "simulation_count": 10000, "simulation_seed": None}
 GROWTH_FIELDS = ("growth_rate_percentage", "growth_period", "forecast_horizon_months",
                  "aht_change_percentage", "aht_change_period")
+CAPACITY_FIELDS = ("current_fte", "working_hours_per_day", "contingency_percentage", "frequency",
+                   "working_days_per_week", "working_days_per_month")
 
 MESSAGES = {
     "volume": "Volume must be greater than zero.",
-    "current_fte": "Current FTE cannot be negative.",
-    "avg_processing_time": "Average processing time must be greater than zero.",
+    "current_fte": "Current FTE cannot be negative (decimals allowed, e.g. 2.5).",
+    "avg_processing_time": "AHT must be greater than zero.",
+    "total_time_spent_hours": "Total time spent must be greater than zero.",
     "working_hours_per_day": "Working hours per day must be greater than 0 and not more than 24.",
-    "working_days_per_week": "Working days per week must be between 1 and 7.",
-    "working_days_per_month": "Working days per month must be between 1 and 31.",
+    "working_days_per_week": "Working days per week must be between 0.5 and 7 (e.g. 5.5 for a Saturday half day).",
+    "working_days_per_month": "Working days per month must be between 1 and 31 (decimals allowed, e.g. 23.83).",
     "contingency_percentage": "Contingency must be between 0% and less than 100% (100% leaves no productive time).",
     "volume_variation_percentage": "Volume variation percentage cannot be negative.",
-    "time_variation_percentage": "Processing time variation percentage cannot be negative.",
+    "time_variation_percentage": "AHT variation percentage cannot be negative.",
     "simulation_count": f"Simulation count must be between {SIM_MIN:,} and {SIM_MAX:,}.",
     "simulation_seed": "Simulation seed must be zero or a positive whole number.",
-    "growth_rate_percentage": "Volume growth % must be greater than -100% and not more than 1000%.",
+    "growth_rate_percentage": "Growth % must be greater than -100% and not more than 1000%.",
     "aht_change_percentage": "AHT change % must be greater than -100% and not more than 1000%.",
     "forecast_horizon_months": f"Forecast horizon must be between 1 and {HORIZON_MAX} months.",
 }
+AUTO_FILL_ZERO_FTE = ("Total time spent cannot be filled from working capacity when Current FTE is 0. "
+                      "Enter the actual hours spent.")
+AUTO_AHT_ZERO_FTE = ("AHT cannot be calculated when Current FTE is 0 (no team time is available). "
+                     "Enter the measured AHT per item.")
 BASE_RULES = [
     ("volume", lambda v: v > 0),
     ("current_fte", lambda v: v >= 0),
     ("avg_processing_time", lambda v: v > 0),
+    ("total_time_spent_hours", lambda v: v > 0),
     ("working_hours_per_day", lambda v: 0 < v <= 24),
-    ("working_days_per_week", lambda v: 1 <= v <= 7),
+    ("working_days_per_week", lambda v: Decimal("0.5") <= v <= 7),
     ("working_days_per_month", lambda v: 1 <= v <= 31),
     ("contingency_percentage", lambda v: 0 <= v < 100),
     ("growth_rate_percentage", lambda v: Decimal("-100") < v <= Decimal("1000")),
@@ -63,7 +71,6 @@ MC_RULES = [
 
 
 def validate_forecast_numbers(cleaned, add_error, run_monte_carlo=True):
-    """Shared numeric validation. Monte Carlo fields are only validated when Monte Carlo is on."""
     rules = BASE_RULES + (MC_RULES if run_monte_carlo else [])
     for field, rule in rules:
         value = cleaned.get(field)
@@ -71,8 +78,46 @@ def validate_forecast_numbers(cleaned, add_error, run_monte_carlo=True):
             add_error(field, MESSAGES[field])
 
 
+def _capacity_ready(cleaned, errors, extra=()):
+    keys = CAPACITY_FIELDS + tuple(extra)
+    return not any(k in errors for k in keys) and not any(cleaned.get(k) in (None, "") for k in keys)
+
+
+def auto_fill_aht(cleaned, add_error, errors):
+    """
+    Same formula as the Calculate AHT button, used when AHT is left blank (contingency NOT deducted):
+        AHT = Current FTE x hours/day x working days in period x 60 / Volume
+    """
+    if cleaned.get("avg_processing_time") not in (None, ""):
+        return False
+    if not _capacity_ready(cleaned, errors, extra=("volume",)):
+        if "avg_processing_time" not in errors and "volume" not in errors:
+            add_error("avg_processing_time", "Enter AHT or click Calculate AHT.")
+        return False
+    hours = available_time_in_period(*(cleaned.get(k) for k in CAPACITY_FIELDS))
+    aht = aht_from_total_time(hours, cleaned["volume"]) if hours else None
+    if aht is None:
+        add_error("avg_processing_time", AUTO_AHT_ZERO_FTE)
+        return False
+    cleaned["avg_processing_time"] = aht.quantize(Decimal("0.0001"))
+    return True
+
+
+def auto_fill_total_time(cleaned, add_error, errors):
+    """Bulk upload: fill a blank Total time spent from team working time (contingency not deducted)."""
+    if cleaned.get("total_time_spent_hours") not in (None, ""):
+        return False
+    if not _capacity_ready(cleaned, errors):
+        return False
+    value = available_time_in_period(*(cleaned.get(k) for k in CAPACITY_FIELDS))
+    if value is None or value <= 0:
+        add_error("total_time_spent_hours", AUTO_FILL_ZERO_FTE)
+        return False
+    cleaned["total_time_spent_hours"] = value
+    return True
+
+
 def validate_growth_factor(cleaned, add_error, errors):
-    """Block volume growth / AHT change settings that compound to an unrealistic workload within the horizon."""
     horizon = cleaned.get("forecast_horizon_months")
     vol_rate = cleaned.get("growth_rate_percentage") or Decimal("0")
     aht_rate = cleaned.get("aht_change_percentage") or Decimal("0")
@@ -104,10 +149,6 @@ def validate_growth_factor(cleaned, add_error, errors):
 
 
 def apply_monte_carlo_switch(form, cleaned):
-    """
-    If Monte Carlo is off: drop errors on Monte Carlo fields and store defaults.
-    If Monte Carlo is on: variation % and simulation count become mandatory.
-    """
     run_mc = bool(cleaned.get("run_monte_carlo"))
     if not run_mc:
         rules = dict(MC_RULES)
@@ -137,6 +178,10 @@ def apply_growth_defaults(cleaned):
         cleaned["forecast_horizon_months"] = HORIZON_DEFAULT
 
 
+def _trim(value):
+    return f"{value.quantize(Decimal('0.0001')):f}".rstrip("0").rstrip(".")
+
+
 class BootstrapFormMixin:
     def _apply_bootstrap(self):
         for field in self.fields.values():
@@ -158,70 +203,79 @@ class BootstrapFormMixin:
 
 
 class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
+    """
+    AHT (minutes per item) sits in Process Details with a Calculate AHT button.
+    Blank AHT is calculated on save with the same formula. Current FTE and Volume accept decimals.
+    """
+
     class Meta:
         model = ManpowerForecast
-        fields = ["function", "process", "frequency", "volume", "current_fte", "avg_processing_time", "time_unit",
+        fields = ["function", "process", "frequency", "volume", "current_fte", "avg_processing_time",
                   "working_hours_per_day", "working_days_per_week", "working_days_per_month",
                   "contingency_percentage", "run_monte_carlo", "volume_variation_percentage",
                   "time_variation_percentage", "simulation_count", "simulation_seed",
                   "growth_rate_percentage", "growth_period", "aht_change_percentage", "aht_change_period",
                   "forecast_horizon_months", "remarks"]
         labels = {
-            "function": "Function Name",
-            "process": "Process Name",
-            "current_fte": "Current FTE",
-            "avg_processing_time": "Average Handling Time (AHT) to Complete One Volume",
-            "time_unit": "Average Time Unit",
-            "working_hours_per_day": "Working Hours Per Day",
-            "working_days_per_week": "Working Days Per Week",
-            "working_days_per_month": "Working Days Per Month",
-            "contingency_percentage": "Shrinkage (%)",
-            "run_monte_carlo": "Run Monte Carlo simulation",
-            "volume_variation_percentage": "Volume Variation (%)",
-            "time_variation_percentage": "Processing Time Variation (%)",
-            "simulation_count": "Number of Monte Carlo Simulations",
-            "simulation_seed": "Simulation Seed",
-            "growth_rate_percentage": "Volume Growth (%)",
-            "growth_period": "Growth Per",
-            "aht_change_percentage": "AHT Change (%)",
-            "aht_change_period": "AHT Change Per",
-            "forecast_horizon_months": "Forecast Horizon (Months)",
+            "function": "Function Name", "process": "Process Name", "current_fte": "Current FTE",
+            "avg_processing_time": "AHT (Minutes per Item)",
+            "working_hours_per_day": "Working Hours Per Day", "working_days_per_week": "Working Days Per Week",
+            "working_days_per_month": "Working Days Per Month", "contingency_percentage": "Contingency (%)",
+            "run_monte_carlo": "Run Monte Carlo simulation", "volume_variation_percentage": "Volume Variation (%)",
+            "time_variation_percentage": "AHT Variation (%)", "simulation_count": "Number of Monte Carlo Simulations",
+            "simulation_seed": "Simulation Seed", "growth_rate_percentage": "Volume Growth (%)",
+            "growth_period": "Growth Per", "aht_change_percentage": "AHT Change (%)",
+            "aht_change_period": "AHT Change Per", "forecast_horizon_months": "Forecast Horizon (Months)",
         }
         help_texts = {
-            "volume": "Total transactions for the selected frequency.",
-            "current_fte": "FTE currently allocated (0 allowed).",
-            "contingency_percentage": "Non-productive allowance (breaks, meetings, rework).",
+            "volume": "Total transactions for the selected frequency (decimals allowed).",
+            "current_fte": "People currently allocated. Decimals allowed, e.g. 2.5 (0 allowed).",
+            "avg_processing_time": "Click Calculate AHT, or type the measured time per item.",
+            "working_hours_per_day": "Standard full-day hours.",
+            "working_days_per_week": "Full-day equivalents. Mon-Fri 8 h + Sat 4 h = 5.5.",
+            "working_days_per_month": "Full-day equivalents per month (5.5 days a week = 23.83).",
+            "contingency_percentage": "Non-productive allowance (breaks, meetings, rework). Not used for Calculate AHT.",
             "run_monte_carlo": "Switch off to get the status from the deterministic calculation only.",
             "simulation_seed": "Optional. The same seed reproduces identical results.",
-            "growth_rate_percentage": "Expected volume increase per period. Negative = decline. 0 = no volume change.",
+            "growth_rate_percentage": "Expected volume increase per period. Negative = decline. 0 = no change.",
             "growth_period": "How often the volume growth % is applied (compounded).",
-            "aht_change_percentage": "Enter the size of the expected AHT change. Choose its direction separately; 0 = no change.",
+            "aht_change_percentage": "Expected change in time per item. Positive = slower, negative = faster. 0 = no change.",
             "aht_change_period": "How often the AHT change % is applied (compounded).",
             "forecast_horizon_months": f"How far ahead to project (1-{HORIZON_MAX} months).",
         }
         widgets = {
-            "volume": forms.NumberInput(attrs={"min": "0.01", "step": "0.01"}),
-            "current_fte": forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
-            "avg_processing_time": forms.NumberInput(attrs={"min": "0.01", "step": "0.01"}),
-            "working_hours_per_day": forms.NumberInput(attrs={"min": "0.25", "max": "24", "step": "0.25"}),
-            "working_days_per_week": forms.NumberInput(attrs={"min": "1", "max": "7"}),
-            "working_days_per_month": forms.NumberInput(attrs={"min": "1", "max": "31"}),
-            "contingency_percentage": forms.NumberInput(attrs={"min": "0", "max": "99.99", "step": "0.01"}),
+            "volume": forms.NumberInput(attrs={"min": "0.01", "step": "any"}),
+            "current_fte": forms.NumberInput(attrs={"min": "0", "step": "any"}),
+            "avg_processing_time": forms.NumberInput(attrs={"min": "0.0001", "step": "any", "data-aht-input": "true",
+                                                            "placeholder": "Click Calculate AHT"}),
+            "working_hours_per_day": forms.NumberInput(attrs={"min": "0.25", "max": "24", "step": "any"}),
+            "working_days_per_week": forms.NumberInput(attrs={"min": "0.5", "max": "7", "step": "any"}),
+            "working_days_per_month": forms.NumberInput(attrs={"min": "1", "max": "31", "step": "any"}),
+            "contingency_percentage": forms.NumberInput(attrs={"min": "0", "max": "99.99", "step": "any"}),
             "run_monte_carlo": forms.CheckboxInput(attrs={"role": "switch", "data-mc-toggle": "true"}),
-            "volume_variation_percentage": forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
-            "time_variation_percentage": forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+            "volume_variation_percentage": forms.NumberInput(attrs={"min": "0", "step": "any"}),
+            "time_variation_percentage": forms.NumberInput(attrs={"min": "0", "step": "any"}),
             "simulation_count": forms.NumberInput(attrs={"min": SIM_MIN, "max": SIM_MAX, "step": "1000"}),
             "simulation_seed": forms.NumberInput(attrs={"min": "0"}),
-            "growth_rate_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "0.01"}),
-            "aht_change_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "0.01"}),
+            "growth_rate_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "any"}),
+            "aht_change_percentage": forms.NumberInput(attrs={"min": "-99.99", "max": "1000", "step": "any"}),
             "forecast_horizon_months": forms.NumberInput(attrs={"min": "1", "max": HORIZON_MAX}),
             "remarks": forms.Textarea(attrs={"rows": 2}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for name in MC_FIELDS + GROWTH_FIELDS:
+        for name in MC_FIELDS + GROWTH_FIELDS + ("avg_processing_time",):
             self.fields[name].required = False
+        self.aht_auto_filled = False
+        if self.instance.pk and not self.is_bound:
+            for name in ("current_fte", "volume", "avg_processing_time", "working_days_per_week",
+                         "working_days_per_month", "working_hours_per_day", "contingency_percentage"):
+                value = getattr(self.instance, name, None)
+                if value is not None:
+                    self.initial[name] = _trim(value)
+            if self.instance.aht_is_calculated:
+                self.fields["avg_processing_time"].widget.attrs["data-calculated"] = "true"
         functions = FunctionMaster.objects.filter(is_active=True)
         processes = ProcessMaster.objects.filter(is_active=True)
         if self.instance.pk:
@@ -251,6 +305,7 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
         run_mc = apply_monte_carlo_switch(self, cleaned)
         apply_growth_defaults(cleaned)
         validate_forecast_numbers(cleaned, self.add_error, run_monte_carlo=run_mc)
+        self.aht_auto_filled = auto_fill_aht(cleaned, self.add_error, self.errors)
         validate_growth_factor(cleaned, self.add_error, self.errors)
         function, process = cleaned.get("function"), cleaned.get("process")
         if function and process and process.function_id != function.id:
@@ -258,7 +313,6 @@ class ManpowerForecastForm(BootstrapFormMixin, forms.ModelForm):
         return cleaned
 
     def _post_clean(self):
-        # Keep one friendly message per field instead of also showing the model validator's message.
         super()._post_clean()
         for field, message in MESSAGES.items():
             errors = self._errors.get(field) if self._errors else None
@@ -307,8 +361,7 @@ class ProcessMasterForm(BootstrapFormMixin, forms.ModelForm):
         function = cleaned.get("function")
         if name and function:
             cleaned["process_name"] = name
-            dup = ProcessMaster.objects.filter(function=function, process_name__iexact=name).exclude(
-                pk=self.instance.pk)
+            dup = ProcessMaster.objects.filter(function=function, process_name__iexact=name).exclude(pk=self.instance.pk)
             if dup.exists():
                 self.add_error("process_name", f"Process '{name}' already exists under function '{function}'.")
         return cleaned
@@ -322,10 +375,8 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
                        ("ok", "Sufficient through horizon"), ("none", "No future projection")]
 
     q = forms.CharField(required=False, label="Search", widget=forms.TextInput(attrs={"placeholder": "Search..."}))
-    function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False,
-                                      empty_label="All functions")
-    process = forms.ModelChoiceField(queryset=ProcessMaster.objects.all(), required=False,
-                                     empty_label="All processes")
+    function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False, empty_label="All functions")
+    process = forms.ModelChoiceField(queryset=ProcessMaster.objects.all(), required=False, empty_label="All processes")
     status = forms.ChoiceField(choices=[("", "All statuses")] + list(ManpowerStatus.choices), required=False)
     frequency = forms.ChoiceField(choices=[("", "All frequencies")] + list(Frequency.choices), required=False)
     approval_status = forms.ChoiceField(choices=[("", "All approvals")] + list(ApprovalStatus.choices),
@@ -333,8 +384,7 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
     monte_carlo = forms.ChoiceField(choices=[("", "All methods"), ("yes", "With Monte Carlo"),
                                              ("no", "Deterministic only")], required=False, label="Method")
     outlook = forms.ChoiceField(choices=OUTLOOK_CHOICES, required=False, label="Future outlook")
-    created_by = forms.ModelChoiceField(queryset=get_user_model().objects.none(), required=False,
-                                        empty_label="All users")
+    created_by = forms.ModelChoiceField(queryset=get_user_model().objects.none(), required=False, empty_label="All users")
     from_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     to_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
 
@@ -357,8 +407,7 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
         d = self.cleaned_data
         if d.get("q"):
             queryset = queryset.filter(Q(process__process_name__icontains=d["q"])
-                                       | Q(function__function_name__icontains=d["q"])
-                                       | Q(remarks__icontains=d["q"]))
+                                       | Q(function__function_name__icontains=d["q"]) | Q(remarks__icontains=d["q"]))
         for key in ("function", "process", "status", "frequency", "approval_status", "created_by"):
             if d.get(key):
                 queryset = queryset.filter(**{key: d[key]})
@@ -381,11 +430,9 @@ class ForecastFilterForm(BootstrapFormMixin, forms.Form):
 
 
 class ExecutiveFilterForm(BootstrapFormMixin, forms.Form):
-    """Controls for the executive dashboard (all optional)."""
     HORIZON_CHOICES = [(3, "3 months"), (6, "6 months"), (12, "12 months"), (18, "18 months"), (24, "24 months")]
 
-    function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False,
-                                      empty_label="All functions")
+    function = forms.ModelChoiceField(queryset=FunctionMaster.objects.all(), required=False, empty_label="All functions")
     horizon = forms.TypedChoiceField(choices=HORIZON_CHOICES, coerce=int, required=False, label="Outlook")
     cost_per_fte = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=14, decimal_places=2,
                                       label="Annual cost per FTE",
@@ -398,7 +445,6 @@ class ExecutiveFilterForm(BootstrapFormMixin, forms.Form):
         self._apply_bootstrap()
 
     def values(self, defaults):
-        """Return (function, horizon, cost_per_fte, approved_only) with defaults for blanks or invalid input."""
         d = self.cleaned_data if self.is_bound and self.is_valid() else {}
         return (d.get("function"), d.get("horizon") or defaults["horizon"],
                 d.get("cost_per_fte") if d.get("cost_per_fte") is not None else defaults["cost_per_fte"],
@@ -433,30 +479,27 @@ class ScenarioBaseForm(BootstrapFormMixin, forms.Form):
         if queryset is not None:
             self.fields["base_forecast"].queryset = queryset.select_related("process", "function")
         self.fields["base_forecast"].label_from_instance = (
-            lambda f: f"#{f.pk} - {f.function.function_name} / {f.process.process_name} "
-                      f"({f.created_at:%d-%b-%Y})")
+            lambda f: f"#{f.pk} - {f.function.function_name} / {f.process.process_name} ({f.created_at:%d-%b-%Y})")
         self.fields["base_forecast"].widget.attrs["data-reload-param"] = "base"
         self._apply_bootstrap()
 
 
 class ScenarioForm(BootstrapFormMixin, forms.Form):
     name = forms.CharField(max_length=80, required=False, label="Scenario name")
-    volume_growth_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6,
-                                           decimal_places=2, label="Volume change today %")
-    time_change_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6,
-                                         decimal_places=2, label="AHT change today %")
-    contingency_percentage = forms.DecimalField(required=False, min_value=Decimal("0"),
-                                                max_value=Decimal("99.99"), max_digits=5, decimal_places=2,
-                                                label="Contingency %")
+    volume_growth_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6, decimal_places=2,
+                                           label="Volume change today %")
+    time_change_pct = forms.DecimalField(required=False, min_value=Decimal("-99"), max_digits=6, decimal_places=2,
+                                         label="AHT change today %")
+    contingency_percentage = forms.DecimalField(required=False, min_value=Decimal("0"), max_value=Decimal("99.99"),
+                                                max_digits=5, decimal_places=2, label="Contingency %")
     current_fte = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=8, decimal_places=2,
-                                     label="Proposed FTE")
-    growth_rate_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"),
-                                                max_value=Decimal("1000"), max_digits=7, decimal_places=2,
+                                     label="Proposed FTE", widget=forms.NumberInput(attrs={"step": "any", "min": "0"}))
+    growth_rate_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"), max_value=Decimal("1000"),
+                                                max_digits=7, decimal_places=2,
                                                 label="Ongoing volume growth % per period",
                                                 help_text="Overrides the base forecast's volume growth %.")
-    aht_change_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"),
-                                               max_value=Decimal("1000"), max_digits=7, decimal_places=2,
-                                               label="Ongoing AHT change % per period",
+    aht_change_percentage = forms.DecimalField(required=False, min_value=Decimal("-99.99"), max_value=Decimal("1000"),
+                                               max_digits=7, decimal_places=2, label="Ongoing AHT change % per period",
                                                help_text="Overrides the base forecast's AHT change %.")
 
     def __init__(self, *args, **kwargs):
@@ -465,13 +508,11 @@ class ScenarioForm(BootstrapFormMixin, forms.Form):
 
     def has_adjustment(self):
         d = getattr(self, "cleaned_data", None) or {}
-        return any(d.get(k) not in (None, "") for k in
-                   ("volume_growth_pct", "time_change_pct", "contingency_percentage", "current_fte",
-                    "growth_rate_percentage", "aht_change_percentage"))
+        return any(d.get(k) not in (None, "") for k in ("volume_growth_pct", "time_change_pct", "contingency_percentage",
+                                                       "current_fte", "growth_rate_percentage", "aht_change_percentage"))
 
 
-ScenarioFormSet = forms.formset_factory(ScenarioForm, extra=0, max_num=CFG.get("SCENARIO_MAX", 4),
-                                        validate_max=True)
+ScenarioFormSet = forms.formset_factory(ScenarioForm, extra=0, max_num=CFG.get("SCENARIO_MAX", 4), validate_max=True)
 
 DEFAULT_SCENARIOS = [
     {"name": "10% Volume Growth", "volume_growth_pct": Decimal("10")},
@@ -508,21 +549,26 @@ TIME_UNIT_LOOKUP.update({"sec": "SECONDS", "secs": "SECONDS", "second": "SECONDS
                          "mins": "MINUTES", "minute": "MINUTES", "hr": "HOURS", "hrs": "HOURS", "hour": "HOURS"})
 YES_VALUES = {"yes", "y", "true", "1", "on"}
 NO_VALUES = {"no", "n", "false", "0", "off"}
-PERIOD_ERROR = "Invalid {}. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly."
 
 
 class ForecastRowForm(forms.Form):
-    """Validates one Excel upload row."""
+    """
+    Validates one Excel upload row. AHT source per row:
+    'AHT Minutes' column, else 'Total Time Spent Hours', else legacy 'Average Processing Time' + 'Time Unit',
+    else calculated from team working time (same as Calculate AHT).
+    """
     function_name = forms.CharField(max_length=150)
     process_name = forms.CharField(max_length=200)
     frequency = forms.CharField()
     volume = forms.DecimalField(max_digits=14, decimal_places=2)
     current_fte = forms.DecimalField(max_digits=8, decimal_places=2)
-    avg_processing_time = forms.DecimalField(max_digits=10, decimal_places=2)
+    aht_minutes = forms.DecimalField(max_digits=14, decimal_places=4, required=False)
+    total_time_spent_hours = forms.DecimalField(max_digits=16, decimal_places=4, required=False)
+    avg_processing_time = forms.DecimalField(max_digits=14, decimal_places=4, required=False)
     time_unit = forms.CharField(required=False)
     working_hours_per_day = forms.DecimalField(max_digits=4, decimal_places=2, required=False)
-    working_days_per_week = forms.IntegerField(required=False)
-    working_days_per_month = forms.IntegerField(required=False)
+    working_days_per_week = forms.DecimalField(max_digits=4, decimal_places=2, required=False)
+    working_days_per_month = forms.DecimalField(max_digits=5, decimal_places=2, required=False)
     contingency_percentage = forms.DecimalField(max_digits=5, decimal_places=2, required=False)
     run_monte_carlo = forms.CharField(required=False)
     volume_variation_percentage = forms.DecimalField(max_digits=6, decimal_places=2, required=False)
@@ -536,17 +582,17 @@ class ForecastRowForm(forms.Form):
     remarks = forms.CharField(required=False)
 
     DEFAULTS = {
-        "working_hours_per_day": Decimal("8"), "working_days_per_week": 5, "working_days_per_month": 22,
-        "contingency_percentage": Decimal("15"), "volume_variation_percentage": Decimal("10"),
-        "time_variation_percentage": Decimal("15"), "simulation_count": 10000,
-        "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0"),
+        "working_hours_per_day": Decimal("8"), "working_days_per_week": Decimal("5"),
+        "working_days_per_month": Decimal("22"), "contingency_percentage": Decimal("15"),
+        "volume_variation_percentage": Decimal("10"), "time_variation_percentage": Decimal("15"),
+        "simulation_count": 10000, "growth_rate_percentage": Decimal("0"), "aht_change_percentage": Decimal("0"),
         "forecast_horizon_months": HORIZON_DEFAULT,
     }
 
     def clean_frequency(self):
         value = (self.cleaned_data.get("frequency") or "").strip().lower()
         if value not in FREQUENCY_LOOKUP:
-            raise ValidationError(PERIOD_ERROR.format("frequency"))
+            raise ValidationError("Invalid frequency. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly.")
         return FREQUENCY_LOOKUP[value]
 
     def clean_time_unit(self):
@@ -562,7 +608,7 @@ class ForecastRowForm(forms.Form):
         if not value:
             return "MONTHLY"
         if value not in FREQUENCY_LOOKUP:
-            raise ValidationError(PERIOD_ERROR.format(label))
+            raise ValidationError(f"Invalid {label}. Use Daily, Weekly, Monthly, Quarterly, Half-Yearly or Yearly.")
         return FREQUENCY_LOOKUP[value]
 
     def clean_growth_period(self):
@@ -570,6 +616,12 @@ class ForecastRowForm(forms.Form):
 
     def clean_aht_change_period(self):
         return self._clean_period("aht_change_period", "AHT change period")
+
+    def clean_aht_minutes(self):
+        value = self.cleaned_data.get("aht_minutes")
+        if value is not None and value <= 0:
+            raise ValidationError("AHT must be greater than zero.")
+        return value
 
     def clean_run_monte_carlo(self):
         value = (self.cleaned_data.get("run_monte_carlo") or "").strip().lower()
@@ -596,6 +648,18 @@ class ForecastRowForm(forms.Form):
                 if not rules[name](cleaned[name]):
                     cleaned[name] = self.DEFAULTS[name]
         validate_forecast_numbers(cleaned, self.add_error, run_monte_carlo=bool(run_mc))
+        self.total_time_auto_filled = False
+        volume = cleaned.get("volume")
+        if (cleaned.get("aht_minutes") and volume and volume > 0
+                and "aht_minutes" not in self.errors):
+            cleaned["total_time_spent_hours"] = cleaned["aht_minutes"] * volume / Decimal("60")
+        elif cleaned.get("total_time_spent_hours") is None and "total_time_spent_hours" not in self.errors:
+            aht = cleaned.get("avg_processing_time")
+            if aht is not None and aht > 0 and volume is not None and volume > 0 and "time_unit" not in self.errors:
+                cleaned["total_time_spent_hours"] = (convert_time_to_minutes(aht, cleaned.get("time_unit"))
+                                                     * volume / Decimal("60"))
+            else:
+                self.total_time_auto_filled = auto_fill_total_time(cleaned, self.add_error, self.errors)
         validate_growth_factor(cleaned, self.add_error, self.errors)
         fname = (cleaned.get("function_name") or "").strip()
         pname = (cleaned.get("process_name") or "").strip()

@@ -51,26 +51,24 @@ class SimulationInline(admin.TabularInline):
 
 @admin.register(ManpowerForecast)
 class ManpowerForecastAdmin(admin.ModelAdmin):
-    list_display = ("id", "function", "process", "frequency", "current_fte", "required_fte",
-                    "utilization_percentage", "run_monte_carlo", "growth_rate_percentage", "growth_period",
-                    "aht_change_percentage", "aht_change_period", "projected_shortfall_month", "status",
-                    "approval_status", "created_by", "created_at")
-    list_filter = ("status", "approval_status", "run_monte_carlo", "growth_period", "aht_change_period",
-                   "frequency", "function")
+    list_display = ("id", "function", "process", "frequency", "volume", "current_fte", "avg_processing_time",
+                    "required_fte", "utilization_percentage", "run_monte_carlo", "status", "approval_status",
+                    "created_at")
+    list_filter = ("status", "approval_status", "run_monte_carlo", "frequency", "function")
     search_fields = ("process__process_name", "function__function_name", "remarks")
     date_hierarchy = "created_at"
     inlines = [SimulationInline]
-    readonly_fields = ("daily_volume", "processing_time_minutes", "productive_minutes_per_fte", "workload_minutes",
-                       "workload_hours", "available_capacity_minutes", "required_fte",
-                       "recommended_operational_fte", "fte_gap", "operational_fte_gap", "utilization_percentage",
-                       "unused_capacity_percentage", "status", "high_utilization_risk", "recommendation",
-                       "status_explanation", "projection_data", "projected_shortfall_month",
+    readonly_fields = ("avg_processing_time", "time_unit", "total_time_spent_hours", "daily_volume",
+                       "processing_time_minutes", "productive_minutes_per_fte", "workload_minutes", "workload_hours",
+                       "available_capacity_minutes", "required_fte", "recommended_operational_fte", "fte_gap",
+                       "operational_fte_gap", "utilization_percentage", "unused_capacity_percentage",
+                       "breakeven_aht_minutes", "aht_headroom_percentage", "status", "high_utilization_risk",
+                       "recommendation", "status_explanation", "projection_data", "projected_shortfall_month",
                        "projected_horizon_required_fte", "projected_horizon_fte_needed", "projected_horizon_status",
                        "projection_summary", "approval_status", "approved_by", "approved_at", "approval_comments",
                        "created_by", "created_at", "updated_at")
 
     def has_add_permission(self, request):
-        # Forecasts must be created through the application so calculations run.
         return False
 
 
